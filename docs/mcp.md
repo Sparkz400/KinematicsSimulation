@@ -26,9 +26,17 @@ or into an environment of your own: `pip install "kinematics-sim[mcp]"`, then `k
 `python -m kinematics_sim.mcp`). From the repository: `pip install maturin==1.16.0 "mcp>=2.3,<3"`, then
 `maturin develop --release` in `crates/sim-py` ([Python module](python.md#install)).
 
-A call that runs longer than 900 s is given up with a message (set `KINEMATICS_SIM_MCP_TIMEOUT_S` to change it); the
-simulator cannot be stopped half-way, so its thread runs to its end in the background. Long calls report progress every
-5 s to a client that asks for it.
+A call that runs longer than 900 s is given up with a message (set `KINEMATICS_SIM_MCP_TIMEOUT_S` to change it), and
+so is one the client cancels: its job (`kinematics_sim.Job`, [Python module](python.md#cancel-a-long-call)) is cancelled,
+so no new run starts and its thread ends once the runs under way have. Long calls report progress every 5 s to a client
+that asks for it: the progress is the seconds used of the timeout (it rises with every notice, as MCP wants), the
+message says the runs finished of runs planned so far. A panic of the simulator's core is answered as a tool error
+("the model failed internally") and the server and its sessions stay.
+
+Limits, so that one call or a client's retries cannot use the machine for hours or the memory without end: at most 32
+sessions (a new one beyond that drops the least recently used; there is no tool to delete one), `optimise_cycle` at most
+200 `runs`, `positioning_accuracy` at most 20 `points` and 20 `repeats`. A call above a limit is refused with a message
+that names it. (The constants are at the top of `kinematics_sim/mcp.py`.)
 
 ### Client configuration
 
@@ -74,7 +82,7 @@ environment) and no `args` does the same.
 | `run_path` | A path given inline (lines, arcs, splines; the format of a [path file](user-guide.md#run-a-path-and-read-path-error)): duration, path error, tracking error, load per motor |
 | `find_motor` | The catalogue search: the top N motors with drive and gearbox, passing and cheapest first, with what each fails and which of its values are estimates |
 | `optimise_cycle` | A shorter cycle that passes every check: cycle time before and after and the settings changed, as values `set_config_values` takes |
-| `loop_margins` | Per motor the velocity loop's crossover, phase and gain margin, peak sensitivity |
+| `loop_margins` | Per motor the velocity loop's crossover, phase and gain margin, peak sensitivity at each pose the cycle stops at; failing rows first, then the smallest phase margin; `top` caps the rows |
 | `positioning_accuracy` | ISO 230-2 per axis and ISO 9283 at the tool (simulated) |
 | `sensitivity` | Which uncertain values move the results most (one at a time, or Morris / Sobol' over all bounds): what to measure first |
 | `write_report` | The sizing report as HTML or PDF, into the output folder under a file name ending in `.html` or `.pdf` |
@@ -90,6 +98,7 @@ injection). So the two tools that write files write only where the operator, who
 | Variable | Effect |
 | --- | --- |
 | `KINEMATICS_SIM_MCP_OUT_DIR` | The output folder (created if missing). Default: `kinematics-sim-output` in the server's working directory, which is wherever the client starts it: set it |
+| `KINEMATICS_SIM_MCP_IN_DIR` | The input folder: the only place a file named by a config value may be read from (see below). Unset, no file is readable |
 | `KINEMATICS_SIM_MCP_OVERWRITE` | `1` lets a tool replace an existing file; otherwise an existing name is refused |
 | `KINEMATICS_SIM_FMI_BINARIES` | The sim-fmi libraries an FMU carries (`sim_fmi.dll`, `libsim_fmi.so`, `libsim_fmi.dylib`), separated by `;` on Windows and `:` elsewhere. Without it, as `sim-cli fmu` does, this platform's library beside a `sim-cli` on `PATH` (a release ships them together; `cargo build -p sim-fmi --release` builds it) |
 | `KINEMATICS_SIM_MCP_TIMEOUT_S` | Seconds before a call is given up (default 900) |
@@ -98,6 +107,16 @@ The model gives a file name, or a relative path inside the folder (`variants/gan
 of the folder is refused: `..`, an absolute path, a drive (`C:x.html`), a network path, a link or junction inside the
 folder that points out of it. So is a name with another extension, and an existing file unless overwriting is allowed.
 The result gives the full path written, to show the user. The FMU's binaries never come from the call.
+
+### Files: the input folder
+
+The same holds for reading. A few config values name a file the simulator opens when the machine is built: any key
+ending in `_file` (`arm.urdf_file`, a cam's `table_file`). Through `create_session` and `set_config_values` a model
+may leave such a value empty or at the machine's own default (the built-in URDF names), or name a file of at most 5 MB
+inside the folder in `KINEMATICS_SIM_MCP_IN_DIR`, checked after resolving the path (`..` and links out of the folder
+are refused; a relative path is the server's working directory's). Anything else gets one fixed refusal that does not
+say whether the file exists. Python 3.10 has no TOML parser in its library, so there `create_session(toml=...)` refuses
+any text with `_file` in it. The CLI and the app read any path.
 
 The resource `kinematics-sim://limits` is a summary of [what it can and cannot tell you](overview.md#what-it-can-and-cannot-tell-you);
 the prompt `size_a_motor` (argument: a description of the machine) walks a model through describe, configure,
@@ -172,13 +191,18 @@ An agent with a shell (Claude Code, Cursor, Codex) can run `sim-cli` from a [rel
 - **Output:** results are CSV on standard output, one header line, units in the column names (`peak_torque_nm`,
   `winding_rise_k`); messages, warnings and summaries (thermal start, accuracy figures, search time) go to the error
   stream. `--out FILE` writes the CSV to a file instead.
-- **Exit codes:** 0 when the command ran, 2 for a refused option, config, key or value, with one line on the error
-  stream saying what (`Configuration value is missing: mass.paylod_kg`, `This command has no such option: --band`).
-  A failing check is a result, not an error: `verdicts` exits 0 and says `FAIL` in its `result` column.
+- **Exit codes:** 0 when the command ran and everything it judged passes; 1 when it ran and printed a failing row
+  (`verdicts`, `margins`, `stop`, `accuracy`, `report`): the table is whole, read it for which check says `FAIL`, and
+  do not treat the 1 as a crash; 2 for a refused option, config, key or value, with one line on the error stream saying
+  what (`Configuration value is missing: mass.paylod_kg`, `This command has no such option: --band`). A result that is
+  `inf` or `nan` comes with a note on the error stream: the loop is unstable, `sim-cli margins MACHINE` measures it.
 - **Values:** `--set path=value` (repeatable, dotted path as in the [config reference](config-reference.md), a misspelt
   key is refused), `--config FILE` for a whole config, `--motor ARTICLE`, `--gearbox`, `--drive` for catalogue parts.
-- **Help:** `sim-cli help` (or `sim-cli` alone) prints the usage of every command in one paragraph and exits 2; there is
-  no `--help` and no help per command: the [user guide](user-guide.md) has the details.
+- **Help:** `sim-cli help` (or `--help`) lists the commands, one to a line; `sim-cli help COMMAND` (or
+  `sim-cli COMMAND --help`) prints the options of that command alone, `sim-cli help options` those every command takes,
+  `help paths` the path file formats and `help units` the units of the columns; all exit 0. A wrong call names the help
+  of its command in one line and exits 2. `sim-cli --version` prints the version. The [user guide](user-guide.md) has
+  the details.
 - **Keep the output small:** write long tables with `--out FILE` and read the head; pick columns with `cut -d, -f...`.
   `run` writes every signal (115 columns on the T-gantry) at every 16th base step: use `--every 160` or more, or
   `analyze` for the summary. Piping into `head` can end `sim-cli` with a "failed printing to stdout" panic once

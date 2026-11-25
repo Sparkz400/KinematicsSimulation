@@ -356,10 +356,12 @@ fn a_box_under_the_traverse_is_judged_by_the_collision_check() {
         with(entry, &[r#"obstacles = [{ name = "post", centre_m = [0.65, -0.05, -0.45], size_m = [0.1, 0.2, 0.1] }]"#]);
     let planned = check_cycle(entry, &hit).unwrap().unwrap();
     assert!(planned.clearance < 0.0 && planned.contact.as_ref().is_some_and(|p| p[1] == 0.35), "{planned:?}");
-    // No obstacles: nothing is checked, and no verdict can fail on it.
+    // No obstacles: nothing is checked against obstacles, and no verdict can fail on it (the machine's own parts may
+    // still be, `self_collision.rs`).
     for entry in MACHINES {
         let cfg = entry.config();
-        assert_eq!(check_cycle(entry, &cfg).unwrap(), None);
+        let planned = check_cycle(entry, &cfg).unwrap();
+        assert!(planned.as_ref().is_none_or(|p| p.clearance == f64::INFINITY && p.contact.is_none()), "{planned:?}");
         let load = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
         assert!(
             load.clearance.is_none() && !verdicts(&cfg, &load).unwrap().iter().any(|v| v.check == "collision"),

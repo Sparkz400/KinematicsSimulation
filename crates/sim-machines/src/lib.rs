@@ -78,16 +78,21 @@ pub fn load_file(path: &Path) -> Result<&'static MachineEntry, FileError> {
     let text = std::fs::read_to_string(path).map_err(|e| fail(ConfigError::Parse(e.to_string()), None))?;
     let json = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
     let toml_text = if json { json_to_toml(&text).map_err(|e| fail(e, None))? } else { text };
-    let known: Vec<Config> = MACHINES.iter().map(|m| m.config()).collect();
+    let known = known_configs();
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("machine");
-    sim_netlist::from_text(&toml_text, !json, stem, &known).map_err(|(error, line)| fail(error, line))
+    sim_netlist::from_text(&toml_text, !json, stem, known).map_err(|(error, line)| fail(error, line))
+}
+
+/// The default configs of the registered machines, parsed once: the keys a machine file may have.
+fn known_configs() -> &'static [Config] {
+    static KNOWN: std::sync::OnceLock<Vec<Config>> = std::sync::OnceLock::new();
+    KNOWN.get_or_init(|| MACHINES.iter().map(|m| m.config()).collect())
 }
 
 /// A machine file's TOML text, checked as `load_file` checks a file, with `id` where `machine.id` names none: for an
-/// FMU, which carries the file among its resources. Each call leaks one entry, as `load_file` does.
+/// FMU, which carries the file among its resources. The same text and id give the same entry, as `load_file` does.
 pub fn load_text(toml_text: &str, id: &str) -> Result<&'static MachineEntry, ConfigError> {
-    let known: Vec<Config> = MACHINES.iter().map(|m| m.config()).collect();
-    sim_netlist::from_text(toml_text, false, id, &known).map_err(|(error, _)| error)
+    sim_netlist::from_text(toml_text, false, id, known_configs()).map_err(|(error, _)| error)
 }
 
 /// A JSON machine file as the TOML text of the same config.

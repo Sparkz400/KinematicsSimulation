@@ -1,11 +1,12 @@
 //! The app without its window. Phase 4 is done when switching machine or language needs no code
 //! change, and switching one effect off changes the traces within one cycle.
 
-use sim_app::model::{Analysis, Model};
+use sim_app::model::{Analysis, JobRef, Model};
 use sim_app::session::{Event, Request, Runner, Session};
 use sim_components::Command;
 use sim_core::{Config, MachineEntry};
 use sim_machines::{LANGUAGES, MACHINES};
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
 /// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload, that of
@@ -1067,7 +1068,10 @@ fn the_cycle_is_analysed_and_judged_in_the_app(entry: &'static MachineEntry) {
     }
     model.run_analysis(Analysis::Cycle);
     wait_for_jobs(&mut model);
-    let noted = |m: &(&str, String)| m.0.starts_with("limit-") || m.0 == "ui-analysis-tripped";
+    // So weak a winding heats without end on most machines: its rise is infinite, which the app names
+    // (`verdict-not-finite`; `sim-cli verdicts` of the planar delta with both currents at 0.02 A prints motor-thermal inf).
+    let noted =
+        |m: &(&str, String)| m.0.starts_with("limit-") || m.0 == "ui-analysis-tripped" || m.0 == "verdict-not-finite";
     assert!(model.messages.iter().all(noted), "{}: {:?}", entry.id, model.messages);
     let checks = &model.cycle_tables()[2];
     assert_eq!(checks[0][0], "Prüfung");
@@ -1179,7 +1183,17 @@ fn the_app_optimises_the_cycle_and_applies_the_settings(entry: &'static MachineE
     let judged = sim_components::analysis::verdicts(&cfg, &load).unwrap();
     if !judged.iter().all(|v| v.ok) {
         wait_for_jobs(&mut model);
-        assert!(model.messages.iter().any(|m| m.0 == "error-config-invalid"), "{}: {:?}", entry.id, model.messages);
+        // The refusal has a key of its own (`error-cycle-fails-already`), with the failing checks as its detail.
+        let refusal = model.messages.iter().find(|m| m.0 == "error-cycle-fails-already");
+        assert!(refusal.is_some_and(|m| !m.1.is_empty()), "{}: {:?}", entry.id, model.messages);
+        // Shown by the checks' labels, not their ids ("residual-sway").
+        let shown = model.tr.tr_arg("error-cycle-fails-already", &refusal.unwrap().1);
+        let failing: Vec<_> = judged.iter().filter(|v| !v.ok).collect();
+        let label = |check: &str| model.tr.tr(&model.check_key(check, None)).to_string();
+        assert!(failing.iter().any(|v| shown.contains(&label(v.check))), "{}: {shown}", entry.id);
+        for v in failing.iter().filter(|v| !label(v.check).contains(v.check)) {
+            assert!(!shown.contains(v.check), "{}: the id {} is shown: {shown}", entry.id, v.check);
+        }
         return;
     }
     // At least 5 % shorter; 2 % where the cycle as configured leaves less than a tenth of the settling tolerance, which
@@ -1254,6 +1268,167 @@ fn the_app_optimises_the_cycle_and_applies_the_settings(entry: &'static MachineE
     }
 }
 per_machine!(the_app_optimises_the_cycle_and_applies_the_settings);
+
+/// Waits until `done` of the job's progress moved: it is running its batch of runs.
+#[track_caller]
+fn wait_for_first_run(model: &mut Model, progress: &sim_components::analysis::Progress) {
+    let start = Instant::now();
+    while progress.done.load(Relaxed) == 0 && start.elapsed() < PATIENCE {
+        model.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(progress.done.load(Relaxed) > 0, "the job did not run a batch");
+}
+
+/// Waits up to `patience` until the job's thread has ended: it held a clone of the progress, which it lets go of last.
+#[track_caller]
+fn wait_for_thread_end(progress: &std::sync::Arc<sim_components::analysis::Progress>, patience: Duration) {
+    let start = Instant::now();
+    while std::sync::Arc::strong_count(progress) > 1 && start.elapsed() < patience {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::sync::Arc::strong_count(progress), 1, "the job's thread is still running");
+}
+
+/// A cycle analysis with a thousand sampled bands (thousands of cycles) is cancelled once its first runs are done: it is
+/// not running long before it would have finished (its runs done are far fewer than planned), the model says that it
+/// was cancelled, the results from before stay as they were, and the thread ends.
+#[test]
+fn a_cancelled_analysis_ends_early_and_keeps_the_earlier_results() {
+    let entry = fewest_bounds();
+    let job = JobRef::Analysis(Analysis::Cycle);
+    let mut model = Model::new(entry, "en");
+    model.set_paused(true);
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    let before = (model.cycle_tables(), model.bands.is_some());
+    assert!(!before.0.is_empty());
+    (model.inputs.bands, model.inputs.samples) = (true, 1000);
+    let started = Instant::now();
+    model.run_analysis(Analysis::Cycle);
+    let progress = model.job_progress(job).expect("the job is running");
+    wait_for_first_run(&mut model, &progress);
+    // At least one cycle's time: the thread may finish the runs under way after the cancel, one per worker.
+    let first_run = started.elapsed();
+    let cancelled_at = Instant::now();
+    model.cancel_job(job);
+    wait_for_jobs(&mut model);
+    let (done, total) = (progress.done.load(Relaxed), progress.total.load(Relaxed));
+    assert!(done < total && total >= 1000, "{done} of {total} runs were done");
+    assert!(cancelled_at.elapsed() < Duration::from_secs(600), "took {:?} to end", cancelled_at.elapsed());
+    assert_eq!(model.messages.last(), Some(&("ui-job-cancelled", String::new())), "{:?}", model.messages);
+    assert_eq!((model.cycle_tables(), model.bands.is_some()), before);
+    assert!(model.job_progress(job).is_none());
+    // The thread stops, not runs its thousand cycles to the end (which the model's answer alone would not show).
+    wait_for_thread_end(&progress, first_run * 10 + Duration::from_secs(2));
+}
+
+/// Without a cancel the job gives its result, as before, and has done all the runs it planned.
+#[test]
+fn an_analysis_that_is_not_cancelled_gives_its_result_and_counts_all_its_runs() {
+    let mut model = Model::new(fewest_bounds(), "en");
+    model.set_paused(true);
+    model.inputs.bands = true;
+    model.run_analysis(Analysis::Cycle);
+    let progress = model.job_progress(JobRef::Analysis(Analysis::Cycle)).expect("the job is running");
+    wait_for_analysis(&mut model);
+    let (done, total) = (progress.done.load(Relaxed), progress.total.load(Relaxed));
+    assert!(total > 0 && done == total, "{done} of {total}");
+    // (The cancel flag itself is set by then: a `Job` cancels itself when dropped, also after its answer was taken.)
+    assert!(model.bands.is_some(), "{:?}", model.messages);
+    assert!(!model.messages.iter().any(|m| m.0 == "ui-job-cancelled"), "{:?}", model.messages);
+}
+
+/// Switching the machine, or opening another config file, cancels the jobs under way: their flags are set, the model
+/// has no job left, and the threads end (the jobs' results have nowhere to go).
+#[test]
+fn switching_the_machine_cancels_the_jobs_under_way() {
+    let entry = fewest_bounds();
+    let other = MACHINES.iter().copied().find(|m| m.id != entry.id).unwrap();
+    let mut model = Model::new(entry, "en");
+    model.set_paused(true);
+    (model.inputs.bands, model.inputs.samples) = (true, 1000);
+    model.run_analysis(Analysis::Cycle);
+    model.trace_bands();
+    let analysis = model.job_progress(JobRef::Analysis(Analysis::Cycle)).unwrap();
+    let traces = model.job_progress(JobRef::Bands).unwrap();
+    model.set_machine(other);
+    let done = |p: &sim_components::analysis::Progress| p.done.load(Relaxed);
+    let at_switch = (done(&analysis), done(&traces));
+    assert!(analysis.cancel.load(Relaxed) && traces.cancel.load(Relaxed));
+    assert!(!model.analysis_running());
+    // Stopped, not run to their end (uncancelled, both end within a minute here, so time alone does not show it): after
+    // the switch at most one more run per worker thread is done, of a thousand.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    wait_for_thread_end(&analysis, PATIENCE);
+    wait_for_thread_end(&traces, PATIENCE);
+    assert!(done(&analysis) <= at_switch.0 + threads, "{} runs done, {} at the switch", done(&analysis), at_switch.0);
+    assert!(done(&traces) <= at_switch.1 + threads, "{} traces done, {} at the switch", done(&traces), at_switch.1);
+    // The same where another config file replaces the machine's.
+    model.set_machine(entry);
+    model.run_analysis(Analysis::Cycle);
+    let again = model.job_progress(JobRef::Analysis(Analysis::Cycle)).unwrap();
+    let path = std::env::temp_dir().join("cancel_on_open_config.toml");
+    std::fs::write(&path, other.default_config).unwrap();
+    assert_eq!(model.entry.id, entry.id);
+    model.open_config(path.to_str().unwrap());
+    std::fs::remove_file(&path).ok();
+    assert!(again.cancel.load(Relaxed));
+    let at_open = done(&again);
+    wait_for_thread_end(&again, PATIENCE);
+    assert!(done(&again) <= at_open + threads, "{} runs done, {at_open} at the opening", done(&again));
+}
+
+/// The kinematics comparison tries every catalogue motor on the task (thousands of cycles over the machines); it runs
+/// its candidates on the job's threads, so a cancel stops it once its first runs are done: no candidate starts after.
+#[test]
+fn a_cancelled_kinematics_comparison_stops() {
+    use sim_app::search_views::ViewJob;
+    let job = JobRef::View(ViewJob::Kinematics);
+    let mut model = Model::new(MACHINES[0], "en");
+    model.set_paused(true);
+    model.inputs.search.task_file =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/pick-place-task.toml").to_string();
+    model.views.start(ViewJob::Kinematics, model.entry, &model.config, &model.inputs);
+    let progress = model.job_progress(job).expect("the comparison is running");
+    wait_for_first_run(&mut model, &progress);
+    model.cancel_job(job);
+    model.poll();
+    assert!(!model.views.running(ViewJob::Kinematics), "the model let go of the job");
+    let (done, total) = (progress.done.load(Relaxed), progress.total.load(Relaxed));
+    assert!(done < total, "{done} of {total} runs were done");
+    // The candidates under way end, no new one starts: at most one more per worker thread (on 16 threads 21 of 96 were
+    // done at the cancel and the thread ended 3 s later; uncancelled it runs all 96).
+    wait_for_thread_end(&progress, PATIENCE);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    assert!(
+        progress.done.load(Relaxed) <= done + threads,
+        "{} of {total} done in the end",
+        progress.done.load(Relaxed)
+    );
+}
+
+/// An unstable loop (an absurd position gain) leaves verdict values that are not finite: the app says so, once for the
+/// analysis, with the key the components' translations have; the default config does not say it.
+#[test]
+fn an_analysis_with_values_that_are_not_finite_says_so_once() {
+    let entry = MACHINES.iter().copied().find(|m| m.config().f64("drive.kv_1_s").is_ok()).unwrap();
+    let said = |model: &Model| model.messages.iter().filter(|m| m.0 == "verdict-not-finite").count();
+    let mut model = Model::new(entry, "en");
+    model.set_paused(true);
+    model.run_analysis(Analysis::Cycle);
+    wait_for_jobs(&mut model);
+    assert_eq!(said(&model), 0, "{:?}", model.messages);
+    model.config.set_text("drive.kv_1_s = 20000.0").unwrap();
+    model.run_analysis(Analysis::Cycle);
+    wait_for_jobs(&mut model);
+    assert_eq!(said(&model), 1, "{:?}", model.messages);
+    for _ in 0..5 {
+        model.poll();
+    }
+    assert_eq!(said(&model), 1, "{:?}", model.messages);
+    assert!(model.tr.has("verdict-not-finite"));
+}
 
 /// The optimiser's lower lifts in the app: with `profile.min_clearance_m` = 0.1 m the two lifts of the machine with two axes go from
 /// 0.35 m to 0.15 m (see `the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated_time`); the table
@@ -2107,6 +2282,8 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         feed: Some(0.05),
         caps: Vec::new(),
         pieces: sim_components::path::parse(pieces).unwrap(),
+        corner: None,
+        dwell_s: 0.0,
     };
     let per_run =
         sim_components::Sim::new(entry, &blended).unwrap().program_deviations(&[run(&pieces)], false).unwrap();
@@ -4801,4 +4978,100 @@ fn the_tool_error_is_one_number_in_the_run_the_chart_and_the_analysis() {
         assert!((figure - drawn).abs() < 1e-12, "{id}: run {figure} m, chart {drawn} m");
         assert!((figure - analysed).abs() < 0.01 * analysed, "{id}: run {figure} m, analysis {analysed} m");
     }
+}
+
+/// The config's edits are steps to undo and redo: a drag (many edits of one value close together) is one step, a
+/// step each for the others, at most 50 of them; the config is changed from what it came from until the edits are taken
+/// back or it is saved; a new edit ends what could be redone; another machine starts with none.
+#[test]
+fn edits_are_undone_redone_and_counted_as_changes() {
+    let mut model = Model::new(MACHINES[0], "en");
+    assert!(!model.dirty() && !model.can_undo() && !model.can_redo());
+    let old = model.config.f64("mass.payload_kg").unwrap();
+    let (switch, _, was) = model.effects().remove(0);
+    for k in 1..=5 {
+        model.set_param("mass.payload_kg", toml::Value::Float(old + f64::from(k)));
+    }
+    model.set_param(&switch, toml::Value::Boolean(!was));
+    assert!(model.dirty());
+    model.undo();
+    assert_eq!(model.config.bool(&switch).unwrap(), was);
+    assert_eq!(model.config.f64("mass.payload_kg").unwrap(), old + 5.0, "the drag is one step");
+    assert!(model.dirty());
+    model.undo();
+    assert_eq!(model.config.f64("mass.payload_kg").unwrap(), old);
+    assert!(!model.dirty() && !model.can_undo(), "back at what it came from is no change");
+    model.redo();
+    model.redo();
+    assert_eq!(model.config.f64("mass.payload_kg").unwrap(), old + 5.0);
+    assert_eq!(model.config.bool(&switch).unwrap(), !was);
+    assert!(model.dirty() && !model.can_redo());
+    // A new edit after an undo ends the steps that were undone.
+    model.undo();
+    assert!(model.can_redo());
+    model.set_param("mass.payload_kg", toml::Value::Float(old + 9.0));
+    assert!(!model.can_redo());
+    // Saved, the config is what the file has: not changed, until an edit is taken back.
+    let file = temp_file(MACHINES[0], "undo-saved.toml");
+    model.save_config(&file);
+    assert!(!model.dirty(), "{:?}", model.messages);
+    model.undo();
+    assert!(model.dirty());
+    // At most 50 steps, from edits of two values taking turns (those of one value close in time are one step).
+    let mut model = Model::new(MACHINES[0], "en");
+    for k in 0..60 {
+        if k % 2 == 0 {
+            let on = model.config.bool(&switch).unwrap();
+            model.set_param(&switch, toml::Value::Boolean(!on));
+        } else {
+            model.set_param("mass.payload_kg", toml::Value::Float(old + f64::from(k)));
+        }
+    }
+    let mut steps = 0;
+    while model.can_undo() {
+        model.undo();
+        steps += 1;
+    }
+    assert_eq!(steps, 50);
+    model.set_machine(MACHINES[1]);
+    assert!(!model.dirty() && !model.can_undo());
+}
+
+/// The parameter filter matches the label or the dotted path in any case, and the list of changed values holds what
+/// differs from the machine's default and nothing else.
+#[test]
+fn parameters_are_filtered_and_the_changed_ones_listed() {
+    let mut model = Model::new(MACHINES[0], "en");
+    assert!(model.changed_params().is_empty());
+    assert!(model.param_matches("mass.payload_kg", ""));
+    assert!(model.param_matches("mass.payload_kg", "PAYLOAD"), "any case");
+    assert!(model.param_matches("mass.payload_kg", " mass.pay "), "the path, trimmed");
+    assert!(!model.param_matches("mass.payload_kg", "no-such-word"));
+    let old = model.config.f64("mass.payload_kg").unwrap();
+    model.set_param("mass.payload_kg", toml::Value::Float(old + 1.0));
+    let changed = model.changed_params();
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    let (path, _, default, now) = &changed[0];
+    assert_eq!(path, "mass.payload_kg");
+    assert_eq!((default.as_ref().and_then(toml::Value::as_float), now.as_float()), (Some(old), Some(old + 1.0)));
+    model.undo();
+    assert!(model.changed_params().is_empty());
+}
+
+/// The search tab has no price list: a ranking by `price` (alone or in a mix) would rank every candidate as unpriced, in
+/// the weight order, without a word, so it is refused as a ranking the tab does not know; `cost` runs.
+#[test]
+fn the_search_tab_refuses_a_ranking_by_price_it_has_no_list_for() {
+    use sim_app::search_views::run_search;
+    let entry = sim_machines::MACHINES[1];
+    let model = Model::new(entry, "en");
+    let mut inputs = model.inputs.clone();
+    inputs.series = "1FK2104-5AK".into();
+    for by in ["price", "cost=1,price=1"] {
+        inputs.search.rank_by = by.into();
+        let refused = run_search(entry, &model.config, &inputs).err();
+        assert_eq!(refused, Some(("ui-search-bad-rank", by.to_string())));
+    }
+    inputs.search.rank_by = "cost".into();
+    assert!(run_search(entry, &model.config, &inputs).is_ok());
 }

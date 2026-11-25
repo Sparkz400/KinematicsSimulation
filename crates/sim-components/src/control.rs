@@ -165,6 +165,11 @@ pub fn lines_through(via: &[Vec<f64>], target: &[f64]) -> Vec<Piece> {
     via.iter().chain([&target.to_vec()]).map(|point| Piece::Line(point.clone())).collect()
 }
 
+/// The serde default of `Controller::feed_override` (a snapshot from before the key has none).
+fn no_override() -> f64 {
+    1.0
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 enum Motion {
     Idle,
@@ -247,6 +252,10 @@ pub struct Controller {
     /// How far a planned path may leave its lines and arcs for transition curves (`path`) and to round a corner between
     /// two lines (`corner`).
     path_tolerance: path::Tolerance,
+    /// `profile.feed_override`: the factor on the programmed feed of the moves of a program (`plan_program`); 1 where the
+    /// config has none.
+    #[serde(default = "no_override")]
+    feed_override: f64,
     /// `profile.cycle_timing = "time_optimal"`: every cycle segment is timed as fast as the motors allow
     /// (`path::plan_time_optimal`), rest to rest, not by the axis limits.
     cycle_time_optimal: bool,
@@ -487,6 +496,7 @@ impl Controller {
             dc_link_rooms: Vec::new(),
             friction_signals: Vec::new(),
             path_tolerance: path::Tolerance::default(),
+            feed_override: 1.0,
             cycle_time_optimal: false,
             segments: Vec::new(),
             motion: Motion::Idle,
@@ -701,6 +711,13 @@ impl Controller {
             path: cfg.non_negative("profile.path_tolerance_m")?,
             corner: cfg.non_negative("profile.corner_tolerance_m")?,
         };
+        // 1 where a config leaves it out (no shipped one has it); 2 is this simulator's limit (Sinumerik and LinuxCNC's
+        // override switches go to 200 %), not a vendor figure.
+        let feed_override =
+            if cfg.get("profile.feed_override").is_ok() { cfg.f64("profile.feed_override")? } else { 1.0 };
+        if !(feed_override > 0.0 && feed_override <= 2.0) {
+            return Err(ConfigError::Invalid("profile.feed_override".into()));
+        }
         let cycle_time_optimal = match cfg.get("profile.cycle_timing")?.as_str() {
             Some("axis_limits") => false,
             Some("time_optimal") => true,
@@ -1035,6 +1052,7 @@ impl Controller {
         self.blend_time = blend_time;
         (self.path_tolerance, self.cycle_time_optimal, self.plan_limits) =
             (path_tolerance, cycle_time_optimal, plan_limits);
+        self.feed_override = feed_override;
         self.dc_link_rooms = dc_link_rooms;
         self.friction_signals = machine
             .motors()
@@ -1484,13 +1502,26 @@ impl Controller {
         pieces: &[Piece],
         time_optimal: bool,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
-        self.plan_from(machine, &self.raw_pos, pieces, time_optimal, None)
+        self.plan_from(machine, &self.raw_pos, pieces, time_optimal, None, self.path_tolerance)
+    }
+
+    /// The tolerances a run of a program is planned within: the config's, with the corner tolerance a G61 or G64 gave it.
+    fn run_tolerance(&self, run: &crate::program::Run) -> path::Tolerance {
+        path::Tolerance { corner: run.corner.unwrap_or(self.path_tolerance.corner), ..self.path_tolerance }
+    }
+
+    /// The caps of a run's pieces with `profile.feed_override` on the programmed feeds (a planner's limit still holds:
+    /// the plan takes the lower of cap and axis limit).
+    fn run_caps(&self, run: &crate::program::Run) -> Option<Vec<f64>> {
+        run.caps().map(|caps| caps.into_iter().map(|f| f * self.feed_override).collect())
     }
 
     /// The timing for a program (`program::read`) from where the setpoint stands, as the poses `Command::Trajectory`
-    /// runs: each run planned from where the one before ends, at rest between them. A run with a feed is planned within
-    /// the axis limits with the speed along the path of each piece capped at its own feed (`path::plan_feeds`); one without as `plan_path`
-    /// plans it, as fast as the motors allow with `time_optimal`. A program without a move is refused (`error-path`).
+    /// runs: each run planned from where the one before ends, at rest between them, within the corner tolerance of its
+    /// G61 or G64. A run with a feed is planned within the axis limits with the speed along the path of each piece
+    /// capped at its own feed times `profile.feed_override` (`path::plan_feeds`); one without as `plan_path` plans it, as
+    /// fast as the motors allow with `time_optimal`. A dwell (G4) holds the last pose for its time, in whole profile
+    /// cycles, as a cycle segment's dwell does. A program without a move is refused (`error-path`).
     pub fn plan_program(
         &self,
         machine: &dyn Machine,
@@ -1498,26 +1529,34 @@ impl Controller {
         time_optimal: bool,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let mut points = vec![(0.0, self.raw_pos.clone())];
-        for run in runs.iter().filter(|run| !run.pieces.is_empty()) {
+        let mut moves = false;
+        for run in runs {
             let (t0, start) = points[points.len() - 1].clone();
+            if run.pieces.is_empty() {
+                let ticks = (run.dwell_s / self.profile_cycle).round() as usize;
+                points.extend((1..=ticks).map(|k| (t0 + k as f64 * self.profile_cycle, start.clone())));
+                continue;
+            }
+            moves = true;
             let planned = self.plan_from(
                 machine,
                 &start,
                 &run.pieces,
                 time_optimal && run.feed.is_none(),
-                run.caps().as_deref(),
+                self.run_caps(run).as_deref(),
+                self.run_tolerance(run),
             )?;
             // Each plan starts at its start at 0 s, which the one before has as its end.
             points.extend(planned.into_iter().skip(1).map(|(t, pose)| (t0 + t, pose)));
         }
-        if points.len() < 2 {
+        if !moves {
             return Err(CommandError { key: "error-path" });
         }
         Ok(points)
     }
 
-    /// `plan_path` from `start`, with the speed along the path of piece i capped at `feeds[i]` where there are any (then
-    /// within the axis limits, also with `time_optimal`).
+    /// `plan_path` from `start` within `tolerance`, with the speed along the path of piece i capped at `feeds[i]` where
+    /// there are any (then within the axis limits, also with `time_optimal`).
     fn plan_from(
         &self,
         machine: &dyn Machine,
@@ -1525,6 +1564,7 @@ impl Controller {
         pieces: &[Piece],
         time_optimal: bool,
         feeds: Option<&[f64]>,
+        tolerance: path::Tolerance,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let time_optimal = time_optimal && feeds.is_none();
         // An arc or a spline can swing out of the range although every point given is inside. Said here,
@@ -1539,7 +1579,7 @@ impl Controller {
         let within_axis_limits = || {
             let (cycle, slack) = (self.profile_cycle, machine.setpoint_slack());
             let (feeds, spin) = (feeds.unwrap_or(&[]), self.law.spin);
-            path::plan_within(machine.axes(), spin, start, pieces, feeds, cycle, self.path_tolerance, slack)
+            path::plan_within(machine.axes(), spin, start, pieces, feeds, cycle, tolerance, slack)
         };
         if time_optimal {
             // A pose on the way that the machine cannot go to (an arm's singularity, where the motors would have to
@@ -1551,7 +1591,7 @@ impl Controller {
             }
         }
         let points = if time_optimal {
-            self.plan_time_optimal_from(machine, start, pieces, self.path_tolerance)
+            self.plan_time_optimal_from(machine, start, pieces, tolerance)
         } else {
             within_axis_limits()
         }?;
@@ -1618,7 +1658,9 @@ impl Controller {
         let mut out = Vec::new();
         for run in runs.iter().filter(|run| !run.pieces.is_empty()) {
             let optimal = time_optimal && run.feed.is_none();
-            let planned = self.plan_from(machine, &start, &run.pieces, optimal, run.caps().as_deref())?;
+            let tolerance = self.run_tolerance(run);
+            let planned =
+                self.plan_from(machine, &start, &run.pieces, optimal, self.run_caps(run).as_deref(), tolerance)?;
             out.push(if optimal {
                 path::deviation_time_optimal(
                     machine,
@@ -1626,11 +1668,11 @@ impl Controller {
                     &self.plan_limits,
                     &start,
                     &run.pieces,
-                    self.path_tolerance,
+                    tolerance,
                     machine.setpoint_slack(),
                 )?
             } else {
-                path::deviation(machine.axes(), &start, &run.pieces, self.path_tolerance, machine.setpoint_slack())?
+                path::deviation(machine.axes(), &start, &run.pieces, tolerance, machine.setpoint_slack())?
             });
             if let Some((_, end)) = planned.last() {
                 start.clone_from(end);

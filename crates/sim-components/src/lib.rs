@@ -29,6 +29,7 @@ pub mod induction;
 pub mod joint;
 pub mod mech;
 pub mod motor_fit;
+pub mod parameters;
 pub mod path;
 pub mod pneumatic;
 pub mod profile;
@@ -44,10 +45,11 @@ pub mod stepper;
 pub mod stop;
 pub mod trace;
 pub mod transmission;
+pub mod tune;
 
 pub use control::{Command, CommandError, Controller, LimitViolation, StopCategory, check_limits};
 pub use drive::DriveMode;
-pub use sim::{Contact, Sim, Snapshot, load_config, schema};
+pub use sim::{Contact, Sim, Snapshot, config_hint, load_config, schema, set_config, set_config_text};
 
 /// Refuses each of `effects` (`effects.<name>`) switched on in `cfg` (`error-effect-not-modelled`): switches a machine's
 /// config has with the others of its crate but that this machine does not model, so that one turned on is not silently

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -538,3 +539,55 @@ def test_fit_and_identify_return_what_they_found_beside_the_fits_that_found_noth
     assert found["quantity"] == [r["quantity"] for r in csv.DictReader(io.StringIO(done.stdout))]
     assert len(found["errors"]) == 1 and found["errors"][0] in done.stderr
     assert ks.fit(configured(), trace_file=trace)["errors"] == []
+
+
+def test_a_job_counts_a_call_and_returns_what_the_plain_call_does():
+    cfg = ks.Config(FIRST)
+    job = ks.Job()
+    assert (job.done, job.total, job.cancelled) == (0, 0, False)
+    counted = job.run(lambda: ks.verdicts(cfg, bands=True, samples=4))
+    plain = ks.verdicts(cfg, bands=True, samples=4)
+    assert np.array_equal(counted["value"], plain["value"]) and np.array_equal(counted["high"], plain["high"])
+    assert job.total > 0 and job.done == job.total and not job.cancelled
+    with pytest.raises(ZeroDivisionError):  # what the callable raises comes out as it is
+        job.run(lambda: 1 / 0)
+
+
+def test_a_job_cancelled_before_its_start_raises_at_the_first_batch():
+    job = ks.Job()
+    job.cancel()
+    assert job.cancelled
+    with pytest.raises(ks.Cancelled):
+        job.run(lambda: ks.verdicts(ks.Config(FIRST), bands=True))
+    assert job.done == 0
+    assert issubclass(ks.Cancelled, Exception)
+
+
+def test_a_running_job_is_cancelled_from_another_thread_long_before_its_end(capfd):
+    cfg = ks.Config(FIRST)
+    start = time.perf_counter()
+    ks.verdicts(cfg, bands=True, samples=8)
+    small = time.perf_counter() - start  # the whole 8-run batch; the long job is 400 times that uncancelled
+    job, outcome = ks.Job(), []
+
+    def work():
+        try:
+            outcome.append(job.run(lambda: ks.verdicts(cfg, bands=True, samples=3200)))
+        except BaseException as e:  # noqa: BLE001 - the type is what the test is about
+            outcome.append(e)
+
+    worker = threading.Thread(target=work)
+    worker.start()
+    deadline = time.perf_counter() + 300  # 9 s here; a runner is several times slower
+    while job.done == 0 and time.perf_counter() < deadline:
+        time.sleep(0.01)
+    assert job.done > 0
+    cancelled_at = time.perf_counter()
+    job.cancel()
+    worker.join(timeout=300)
+    ended_after = time.perf_counter() - cancelled_at
+    assert not worker.is_alive() and isinstance(outcome[0], ks.Cancelled)
+    assert ended_after < 5 * small + 2.0  # the runs under way finish, no new one starts
+    assert 0 < job.done < job.total
+    # Quietly: no panic message nor traceback on the error stream (PyO3 prints one where it fetches a PanicException).
+    assert "PanicException" not in capfd.readouterr().err

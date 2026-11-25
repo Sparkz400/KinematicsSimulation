@@ -1,5 +1,5 @@
 //! Batch front end: runs the core as fast as the CPU allows and writes CSV.
-//! Every message comes from the translation files; see `cli-usage` there for the commands.
+//! Every message comes from the translation files; see `cli-help-*` there for the commands.
 
 use sim_components::analysis::{
     SWEEP_POINTS, analyse_cycle_with, analyse_trajectory_with, bandwidth, closed_loop_response,
@@ -12,10 +12,12 @@ use sim_components::motor_fit::{
 };
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv};
 use sim_components::{Command, Sim};
-use sim_core::{Config, ConfigError, MachineEntry, Translations};
+use sim_core::{Bound, Config, ConfigError, ConfigHint, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+mod help;
 mod report;
 
 static I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
@@ -25,9 +27,16 @@ struct Failure(&'static str, String);
 
 impl From<ConfigError> for Failure {
     fn from(e: ConfigError) -> Self {
+        if let ConfigError::Bounded(bound, path) = &e {
+            *BOUNDED.lock().unwrap_or_else(|p| p.into_inner()) = Some((*bound, path.clone()));
+        }
         Failure(e.key(), e.detail().into())
     }
 }
+
+/// The limit and path of the last value a shared reader refused, wherever it was read (the machine, the analyses, the
+/// verdicts), for `config_help`: a `Failure` carries key and path only.
+static BOUNDED: std::sync::Mutex<Option<(Bound, String)>> = std::sync::Mutex::new(None);
 
 impl From<TraceError> for Failure {
     fn from(e: TraceError) -> Self {
@@ -60,8 +69,18 @@ const COMMON: [&str; 12] = [
     "--lang",
 ];
 /// Options without a value.
-const FLAGS: [&str; 8] =
-    ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness", "--shapes"];
+const FLAGS: [&str; 10] = [
+    "--cycle",
+    "--time-optimal",
+    "--bands",
+    "--worst",
+    "--axes",
+    "--nominal",
+    "--stiffness",
+    "--shapes",
+    "--no-notch",
+    "--help",
+];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -128,22 +147,106 @@ impl Args {
 
 fn main() {
     let args = Args(std::env::args().skip(1).collect());
-    if args.flag("--help") || args.flag("-h") {
-        let tr = texts(args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en"), MACHINES[0]);
-        println!("{}", tr.tr("cli-usage"));
+    if args.flag("--version") || args.flag("-V") {
+        println!("sim-cli {}", env!("CARGO_PKG_VERSION"));
         return;
     }
     let lang = args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en");
+    // `help [TOPIC]`, `COMMAND --help` and `--help`: the help of the command, or the overview, on standard output.
+    let command = args.positional(0).filter(|word| !word.starts_with('-'));
+    if command == Some("help") || args.flag("--help") || args.flag("-h") {
+        let tr = texts(lang, MACHINES[0]);
+        let topic = if command == Some("help") { args.positional(1) } else { command };
+        match help::text(&tr, topic) {
+            Some(text) => println!("{text}"),
+            None => {
+                eprintln!("{}", tr.tr_arg("cli-usage-unknown", topic.unwrap_or_default()));
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     let entry = machine(&args).unwrap_or(MACHINES[0]);
     let tr = texts(lang, entry);
     if let Err(Failure(key, arg)) = dispatch(&args, &tr) {
-        eprintln!("{}", tr.tr_arg(key, &arg));
+        if key == "cli-usage" {
+            // Not everything: the help of the command that was meant, or with no command the overview.
+            match command {
+                Some(name) if help::COMMANDS.contains(&name) => eprintln!("{}", tr.tr_arg("cli-usage-hint", name)),
+                Some(name) => eprintln!("{}", tr.tr_arg("cli-usage-unknown", name)),
+                None => eprintln!("{}", help::text(&tr, None).unwrap_or_default()),
+            }
+        } else {
+            eprintln!("{}{}", tr.tr_arg(key, &arg), config_help(&args, &tr, key, &arg));
+        }
         std::process::exit(2);
+    }
+    // The table is printed in full first; the exit code then says that a check failed (2 stays for usage and config).
+    if CHECK_FAILED.load(Ordering::Relaxed) {
+        std::process::exit(1);
     }
 }
 
-fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
-    let known: &[&str] = match args.positional(0) {
+/// What `Config::hint` has to add to a config error, as a suffix of its message: the nearest path (a misspelt `--set`
+/// path) or the value of the refused one. The config is built again for it, with the assignments that apply; an empty
+/// suffix where there is nothing to add or the config cannot be built.
+fn config_help(args: &Args, tr: &Translations, key: &str, arg: &str) -> String {
+    let error = match key {
+        "error-config-missing" => ConfigError::Missing(arg.into()),
+        "error-config-unknown" => ConfigError::Unknown(arg.into()),
+        "error-config-invalid" => ConfigError::Invalid(arg.into()),
+        "error-config-type" => ConfigError::Type(arg.into()),
+        _ => return String::new(),
+    };
+    let Ok((entry, named)) = named_config(args) else { return String::new() };
+    let Ok(mut cfg) = sim_components::catalog::resolve(entry, &named) else {
+        return String::new();
+    };
+    for assignment in args.options("--set") {
+        // The refused one is what the error is about.
+        let _ = sim_components::set_config_text(entry, &mut cfg, assignment);
+    }
+    // With the limit it broke where a shared reader refused it (a check made elsewhere keeps the plain value).
+    let error = match BOUNDED.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        Some((bound, path)) if key == "error-config-invalid" && path == arg => ConfigError::Bounded(bound, path),
+        _ => error,
+    };
+    match sim_components::config_hint(entry, &cfg, &error) {
+        Some(ConfigHint::Nearest(path)) => format!(" {}", tr.tr_arg("cli-hint-nearest", &path)),
+        Some(ConfigHint::Value(value)) => format!(" {}", tr.tr_arg("cli-hint-value", &value)),
+        Some(ConfigHint::Bounded(value, bound)) => {
+            let key = match bound {
+                Bound::Positive => "cli-hint-positive",
+                Bound::NonNegative => "cli-hint-non-negative",
+                Bound::Number => "cli-hint-number",
+            };
+            format!(" {}", tr.tr_arg(key, &value))
+        }
+        None => String::new(),
+    }
+}
+
+/// Set by `judged` when a command that judges printed a failing row.
+static CHECK_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// The result word of a judged row; a failing one makes the exit code 1.
+fn judged(ok: bool) -> &'static str {
+    if !ok {
+        CHECK_FAILED.store(true, Ordering::Relaxed);
+    }
+    if ok { "ok" } else { "FAIL" }
+}
+
+/// On the error stream, after a table of verdicts: that a result of it is not finite, and what to run to see the loop.
+fn tell_not_finite<'a>(tr: &Translations, verdicts: impl IntoIterator<Item = &'a sim_components::analysis::Verdict>) {
+    if sim_components::analysis::any_not_finite(verdicts) {
+        eprintln!("{}", tr.tr("verdict-not-finite"));
+    }
+}
+
+/// The options of a command beside the common ones.
+fn command_options(command: Option<&str>) -> &'static [&'static str] {
+    match command {
         Some("run") => &[
             "--move",
             "--cycle",
@@ -169,6 +272,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
             "--motor-id",
             "--drives",
             "--rank-by",
+            "--prices",
             "--weights",
             "--robust",
             "--path",
@@ -182,9 +286,10 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
         Some("margins") => &["--bands"],
+        Some("tune") => &["--phase-margin", "--gain-margin", "--no-notch"],
         Some("modes") => &["--axis-index", "--points", "--shapes"],
         Some("workspace") => &["--z", "--points"],
-        Some("replay") => &["--trace", "--map"],
+        Some("replay") => &["--trace", "--map", "--tolerance"],
         Some("fit") => &[
             "--trace",
             "--map",
@@ -195,6 +300,9 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
             "--stiffness-key",
             "--dataset",
             "--report",
+            "--within",
+            "--write",
+            "--sigmas",
         ],
         Some("identify") => &[
             "--trace",
@@ -209,10 +317,14 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         ],
         Some("compare") => &["--effect", "--signal", "--differences"],
         Some("fmu") => &["--binary", "--fmi"],
+        Some("parameters") => &["--family"],
         Some("report") => &["--bands"],
         _ => &[],
-    };
-    args.check(known)?;
+    }
+}
+
+fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    args.check(command_options(args.positional(0)))?;
     if let Some(dir) = args.option("--catalog") {
         sim_components::catalog::use_directory(std::path::Path::new(dir))?;
     }
@@ -241,6 +353,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("bode") => bode(args),
         Some("tuning") => tuning(args),
         Some("margins") => margins(args, tr),
+        Some("tune") => tune(args, tr),
         Some("modes") => modes(args),
         Some("workspace") => workspace(args),
         Some("replay") => replay(args, tr),
@@ -249,6 +362,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("check-dataset") => check_dataset(args, tr),
         Some("compare") => compare(args),
         Some("fmu") => fmu(args),
+        Some("parameters") => parameters(args, tr),
         Some("report") => report(args, tr),
         Some("stop") => stop(args, tr),
         Some("accuracy") => accuracy(args, tr),
@@ -273,13 +387,33 @@ fn machine(args: &Args) -> Result<&'static MachineEntry, Failure> {
 /// parts it names or `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` and `--axis` name put in from the catalogue, then every
 /// `--set path=value` applied on top.
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
-    let (entry, cfg) = named_config(args)?;
+    let (entry, mut cfg) = named_config(args)?;
+    before_parts(args, entry, &mut cfg)?;
+    // Only a catalogue drive is derated; the search puts one in for every candidate. After `before_parts`, which sets
+    // the installation conditions `--set` names.
+    if args.positional(0) != Some("search")
+        && let Some(key) = sim_components::catalog::condition_without_drive(&cfg)
+    {
+        return Err(Failure("error-drive-derating-none", key.to_string()));
+    }
     // Parts by name from the catalogue, here and not only in the simulator, so that single values can be set on top.
     let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
     for assignment in args.options("--set") {
-        cfg.set_text(assignment)?;
+        sim_components::set_config_text(entry, &mut cfg, assignment)?;
     }
     Ok((entry, cfg))
+}
+
+/// The `--set` assignments of a drive's installation conditions, which are read where its part is put in (it is derated
+/// there): set before the parts are resolved, as the others are after.
+fn before_parts(args: &Args, entry: &MachineEntry, cfg: &mut Config) -> Result<(), Failure> {
+    for assignment in args.options("--set") {
+        let path = assignment.split('=').next().unwrap_or("").trim();
+        if sim_components::catalog::DRIVE_CONDITION_KEYS.contains(&path) {
+            sim_components::set_config_text(entry, cfg, assignment)?;
+        }
+    }
+    Ok(())
 }
 
 /// The machine and its config with the parts the command line names in `[parts]`, before they are resolved.
@@ -331,7 +465,7 @@ fn start(args: &Args, tr: &Translations) -> Result<Sim, Failure> {
         }
         _ => None,
     };
-    tell_plan(tr, planned);
+    tell_plan(tr, planned, sim.min_clearance);
     if let Some(command) = command {
         sim.command(command).map_err(|e| Failure(e.key, String::new()))?;
     }
@@ -370,9 +504,8 @@ fn poses(args: &Args, sim: &Sim, cfg: &Config, tr: &Translations) -> Result<Opti
             .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
     let refused = |e: sim_components::CommandError| Failure(e.key, String::new());
     // A program with feeds is planned run by run (`Sim::plan_program`); one run at the axes' limits as a path file is.
-    let pieces = match runs.as_slice() {
-        [run] if run.feed.is_none() => &run.pieces,
-        _ => return sim.plan_program(&runs, args.flag("--time-optimal")).map(Some).map_err(refused),
+    let Some(pieces) = sim_components::program::as_path(&runs) else {
+        return sim.plan_program(&runs, args.flag("--time-optimal")).map(Some).map_err(refused);
     };
     let deviation = sim.path_deviation(pieces, args.flag("--time-optimal")).map_err(refused)?;
     // Not below what the figure can show: an arc with decimally rounded end coordinates is some 10 nm off.
@@ -402,12 +535,32 @@ fn tell_start(tr: &Translations, change: Option<f64>, repeat: Option<f64>) {
 }
 
 /// On the error stream: the least clearance of a planned path to the obstacles, in mm, and its first pose in contact.
-/// Nothing without obstacles.
-fn tell_plan(tr: &Translations, check: Option<sim_components::collision::PlanCheck>) {
+/// Nothing without obstacles. Then, apart from it, the least clearance between the machine's own parts that are not
+/// joined, in mm, which two and at which pose, and (when it is below the clearance or a contact) that it fails; nothing
+/// where the machine has no two parts to look at.
+fn tell_plan(tr: &Translations, check: Option<sim_components::collision::PlanCheck>, limit: f64) {
+    use sim_components::collision::Body;
     let Some(check) = check else { return };
-    eprintln!("{}", tr.tr_arg("cli-planned-clearance", &format!("{:.1}", check.clearance * 1e3)));
-    if let Some(pose) = check.contact {
-        eprintln!("{}", tr.tr_arg("cli-planned-contact", &pose_text(&pose)));
+    if check.nearest.is_some() {
+        eprintln!("{}", tr.tr_arg("cli-planned-clearance", &format!("{:.1}", check.clearance * 1e3)));
+    }
+    if let Some(pose) = &check.contact {
+        eprintln!("{}", tr.tr_arg("cli-planned-contact", &pose_text(pose)));
+    }
+    if let Some(own) = &check.own {
+        let name = |body: Body| match body {
+            Body::Box(i) => tr.tr_arg("cli-part-box", &(i + 1).to_string()),
+            Body::Capsule(i) => tr.tr_arg("cli-part-capsule", &(i + 1).to_string()),
+        };
+        let detail = format!(
+            "{:.1} mm, {} / {}, {}",
+            own.clearance * 1e3,
+            name(own.bodies[0]),
+            name(own.bodies[1]),
+            pose_text(&own.pose)
+        );
+        let key = if check.own_fails(limit) { "cli-planned-own-fails" } else { "cli-planned-own" };
+        eprintln!("{}", tr.tr_arg(key, &detail));
     }
 }
 
@@ -446,16 +599,48 @@ fn read(path: &str) -> Result<String, Failure> {
 /// `replay <machine> --trace FILE`: the position setpoints of a drive trace run through the simulator.
 /// Prints per motor how far simulated torque and following error are from the measured ones; `--out FILE`
 /// also writes measured and simulated torque, speed and following error side by side, one line per row
-/// of the trace.
+/// of the trace. With `--tolerance NAME=LIMIT,...` (the names are the table's columns) the twin is judged instead: one
+/// row per motor and limit, `motor,quantity,value,limit,result`, exit code 1 where a value is above its limit.
 fn replay(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    const QUANTITIES: [&str; 4] =
+        ["torque_rms_nm", "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"];
+    let limits = match args.option("--tolerance") {
+        None => None,
+        Some(text) => {
+            let bad = || Failure("cli-error-bad-argument", format!("--tolerance {text}"));
+            let mut limits = [None; 4];
+            for part in text.split(',') {
+                let (name, value) = part.split_once('=').ok_or_else(bad)?;
+                let at = QUANTITIES.iter().position(|q| *q == name.trim()).ok_or_else(bad)?;
+                limits[at] =
+                    Some(value.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0).ok_or_else(bad)?);
+            }
+            Some(limits)
+        }
+    };
     let (entry, cfg) = machine_and_config(args)?;
     let machine = (entry.build)(&cfg)?;
     let motors = machine.motors().to_vec();
     let measured = load_trace(args, &motors, tr)?.trace;
     let simulated = sim_components::trace::replay(entry, &cfg, &measured)?;
-    println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
-    for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
-        println!("{},{:.6e},{:.6e},{:.6e},{:.6e}", motor.id, d[0], d[1], d[2], d[3]);
+    match limits {
+        None => {
+            println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
+            for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
+                println!("{},{:.6e},{:.6e},{:.6e},{:.6e}", motor.id, d[0], d[1], d[2], d[3]);
+            }
+        }
+        Some(limits) => {
+            println!("motor,quantity,value,limit,result");
+            for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
+                for (q, name) in QUANTITIES.iter().enumerate() {
+                    // A difference that is not a number is no pass.
+                    if let Some(limit) = limits[q] {
+                        println!("{},{name},{:.6e},{limit:.6e},{}", motor.id, d[q], judged(d[q] <= limit));
+                    }
+                }
+            }
+        }
     }
     if args.option("--out").is_some() {
         let mut out = output(args, "--out")?;
@@ -478,44 +663,114 @@ fn replay(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// own moves; with `--sweep FILE` (a frequency response as `sweep` writes it, taken on motor `--sweep-motor` with
 /// `--amplitude`) the load's resonance on the belt.
 /// With `--dataset DIR --report OUT` the whole report of a dataset folder instead (`report::run`).
+/// With `--within N` the twin is judged: each row whose fitted value is more than N standard errors from the config's
+/// says FAIL (columns `apart` and `result`), exit code 1. With `--write FILE` the config is written with the fitted
+/// values that are one key of it, and `[bounds]` of `--sigmas` standard errors (2 by default) about them.
 fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let positive = |name: &str| -> Result<Option<f64>, Failure> {
+        let value = args.number(name)?;
+        match value.filter(|v| *v <= 0.0) {
+            Some(v) => Err(Failure("cli-error-bad-argument", format!("{name} {v}"))),
+            None => Ok(value),
+        }
+    };
+    let (within, sigmas) = (positive("--within")?, positive("--sigmas")?);
     if args.option("--dataset").is_some() || args.option("--report").is_some() {
+        // The report has no judgement or file of its own to write.
+        if within.is_some() || sigmas.is_some() || args.option("--write").is_some() {
+            return Err(Failure("cli-usage", String::new()));
+        }
         return report::run(args, tr);
     }
+    if sigmas.is_some() && args.option("--write").is_none() {
+        return Err(Failure("cli-error-missing-value", "--write".into()));
+    }
     let mut out = output(args, "--out")?;
-    let (advice, result) = fit_rows(args, tr, &mut *out)?;
+    let (advice, result, rows) = fit_rows(args, tr, &mut *out, within)?;
     out.flush().map_err(io)?;
     advice.iter().for_each(|line| eprintln!("{line}"));
-    result
+    // Nothing is written from a fit that failed.
+    match args.option("--write") {
+        Some(path) if result.is_ok() => write_fit(args, tr, &rows, path, sigmas.unwrap_or(2.0)),
+        _ => result,
+    }
 }
 
-/// The table of `fit` written to `out`, and what to change in the config, with the failure that came after the table.
+/// One value of `fit` that has a config counterpart and a standard error: what `--within` judges and `--write` writes.
+struct FitRow {
+    quantity: String,
+    of: String,
+    config: f64,
+    fitted: f64,
+    error: f64,
+}
+
+/// The table of `fit` as it is written: with `--within` two columns more, how many standard errors the fitted value is
+/// from the config's and the result (`ok`, `FAIL`, or `not judged` where the row has no standard error or no config's value).
+struct FitTable<'a> {
+    out: &'a mut dyn Write,
+    within: Option<f64>,
+    rows: Vec<FitRow>,
+}
+
+impl FitTable<'_> {
+    fn header(&mut self) -> Result<(), Failure> {
+        // "units" is the last of the six columns: the unit of the row's numbers, empty where there is none to name.
+        let columns = if self.within.is_some() { ",apart,result" } else { "" };
+        writeln!(self.out, "quantity,of,config,fitted,standard_error,units{columns}").map_err(io)
+    }
+
+    /// `line` is the row's six columns; `values` its config's value, the fitted one and the standard error, where it has them.
+    fn row(&mut self, line: String, quantity: &str, of: &str, values: Option<[f64; 3]>) -> Result<(), Failure> {
+        self.note(quantity, of, values);
+        let Some(limit) = self.within else { return writeln!(self.out, "{line}").map_err(io) };
+        let apart = values.filter(|[c, f, e]| c.is_finite() && f.is_finite() && *e > 0.0 && e.is_finite());
+        let judgement = match apart {
+            Some([c, f, e]) => {
+                let apart = (f - c).abs() / e;
+                format!("{apart:.2},{}", judged(apart <= limit))
+            }
+            None => ",not judged".into(),
+        };
+        writeln!(self.out, "{line},{judgement}").map_err(io)
+    }
+
+    fn note(&mut self, quantity: &str, of: &str, values: Option<[f64; 3]>) {
+        if let Some([config, fitted, error]) = values {
+            self.rows.push(FitRow { quantity: quantity.into(), of: of.into(), config, fitted, error });
+        }
+    }
+}
+
+/// The table of `fit` written to `out`, what to change in the config, the failure that came after the table, and the
+/// values the table has a config counterpart and standard error for.
 fn fit_rows(
     args: &Args,
     tr: &Translations,
     out: &mut dyn Write,
-) -> Result<(Vec<String>, Result<(), Failure>), Failure> {
+    within: Option<f64>,
+) -> Result<(Vec<String>, Result<(), Failure>, Vec<FitRow>), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let machine = (entry.build)(&cfg)?;
     if args.option("--trace").is_none() && args.option("--sweep").is_none() {
         return Err(Failure("cli-usage", String::new()));
     }
     let (mut advice, mut result) = (Vec::new(), Ok(()));
-    // "units" is the last column: the unit of the row's numbers, empty where there is none to name.
-    writeln!(out, "quantity,of,config,fitted,standard_error,units").map_err(io)?;
+    let mut table = FitTable { out, within, rows: Vec::new() };
+    table.header()?;
     if args.option("--trace").is_some() && !sim_components::trace::per_axis_fit(machine.as_ref()) {
         let measured = load_trace(args, machine.motors(), tr)?.trace;
         match fit_joints(entry, &cfg, &measured)? {
             Some(fit) => {
                 for v in &fit.values {
-                    writeln!(out, "{},{},{:.6e},{:.6e},{:.3e},", v.quantity, v.of, v.config, v.fitted, v.error)
-                        .map_err(io)?;
+                    let line = format!("{},{},{:.6e},{:.6e},{:.3e},", v.quantity, v.of, v.config, v.fitted, v.error);
+                    table.row(line, v.quantity, &v.of, Some([v.config, v.fitted, v.error]))?;
                 }
                 // One step's row is of `payload`, several are numbered as their factors after them are.
                 for (j, (time, error)) in fit.payload_steps.iter().enumerate() {
                     let of =
                         if fit.payload_steps.len() == 1 { "payload".to_string() } else { format!("payload {}", j + 1) };
-                    writeln!(out, "payload_step_s,{of},,{time:.6e},{error:.3e},s").map_err(io)?;
+                    table.row(format!("payload_step_s,{of},,{time:.6e},{error:.3e},s"), "payload_step_s", &of, None)?;
                 }
                 advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
             }
@@ -531,22 +786,24 @@ fn fit_rows(
             for (q, name) in
                 ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"].iter().enumerate()
             {
-                writeln!(
-                    out,
+                let line = format!(
                     "{name},{},{:.6e},{:.6e},{:.3e},{}",
                     axis.id, fit.config[q], fit.fitted[q], fit.error[q], fit.units[q]
-                )
-                .map_err(io)?;
+                );
+                table.row(line, name, axis.id, Some([fit.config[q], fit.fitted[q], fit.error[q]]))?;
             }
             // The friction beyond its sliding level, where the trace shows it (`identify::friction_details`).
             for d in &fit.details {
-                writeln!(out, "{},{},{:.6e},{:.6e},{:.3e},", d.quantity, axis.id, d.config, d.fitted, d.error)
-                    .map_err(io)?;
+                let line = format!("{},{},{:.6e},{:.6e},{:.3e},", d.quantity, axis.id, d.config, d.fitted, d.error);
+                table.row(line, d.quantity, axis.id, Some([d.config, d.fitted, d.error]))?;
             }
-            // A payload picked or dropped: its time, then the change of the payload's factor there.
+            // A payload picked or dropped: its time, then the change of the payload's factor there (a change, not a
+            // value of the config: not judged).
             for (time, time_error, change, error) in &fit.payload_steps {
-                writeln!(out, "payload_step_s,{},,{time:.6e},{time_error:.3e},s", axis.id).map_err(io)?;
-                writeln!(out, "payload_factor_change,{},0,{change:.6e},{error:.3e},", axis.id).map_err(io)?;
+                let line = format!("payload_step_s,{},,{time:.6e},{time_error:.3e},s", axis.id);
+                table.row(line, "payload_step_s", axis.id, None)?;
+                let line = format!("payload_factor_change,{},0,{change:.6e},{error:.3e},", axis.id);
+                table.row(line, "payload_factor_change", axis.id, None)?;
             }
             advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
         }
@@ -556,10 +813,11 @@ fn fit_rows(
         let key = args.option("--stiffness-key").unwrap_or(BELT_STIFFNESS_KEY);
         match fit_move_stiffness(entry, &cfg, &measured, key) {
             Ok(fit) => {
-                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e},", 1.0, fit.factor, fit.error)
-                    .map_err(io)?;
-                writeln!(out, "ringing_rms_nm,{key},,{:.6e},,", fit.ringing).map_err(io)?;
-                writeln!(out, "ringing_left_rms_nm,{key},,{:.6e},,", fit.residual).map_err(io)?;
+                let line = format!("stiffness_factor,{key},{:.6e},{:.6e},{:.3e},", 1.0, fit.factor, fit.error);
+                table.row(line, "stiffness_factor", key, Some([1.0, fit.factor, fit.error]))?;
+                table.row(format!("ringing_rms_nm,{key},,{:.6e},,", fit.ringing), "ringing_rms_nm", key, None)?;
+                let line = format!("ringing_left_rms_nm,{key},,{:.6e},,", fit.residual);
+                table.row(line, "ringing_left_rms_nm", key, None)?;
                 let (key, detail) = fit.advice();
                 advice.push(tr.tr_arg(key, &detail));
             }
@@ -579,13 +837,18 @@ fn fit_rows(
         )? {
             Some(fit) => {
                 let (id, (config, fitted)) = (machine.motors()[motor].id, (fit.config, fit.fitted));
-                writeln!(
-                    out,
+                let line = format!(
                     "resonance_hz,{id},{:.6e},{:.6e},{:.3e},Hz",
                     config.frequency, fitted.frequency, fitted.frequency_error
-                )
-                .map_err(io)?;
-                writeln!(out, "resonance_damping,{id},{:.6e},{:.6e},,", config.damping, fitted.damping).map_err(io)?;
+                );
+                table.row(
+                    line,
+                    "resonance_hz",
+                    id,
+                    Some([config.frequency, fitted.frequency, fitted.frequency_error]),
+                )?;
+                let line = format!("resonance_damping,{id},{:.6e},{:.6e},,", config.damping, fitted.damping);
+                table.row(line, "resonance_damping", id, None)?;
                 let (key, detail) = fit.advice();
                 advice.push(tr.tr_arg(key, &detail));
             }
@@ -593,7 +856,97 @@ fn fit_rows(
             None => result = Err(Failure("fit-no-resonance", String::new())),
         }
     }
-    Ok((advice, result))
+    Ok((advice, result, table.rows))
+}
+
+/// `fit --write FILE`: the config as the command line gives it, with each fitted quantity that is exactly one key of it
+/// set to the fitted value and a `[bounds]` entry of `sigmas` standard errors either side of it. Only the factor on a
+/// stiffness (`--stiffness`) is one key; every other quantity of the table is the trace's value of what several keys
+/// make up (the moved mass of an axis, a friction that the motor, gearbox and guide share) or of none, and is named on
+/// the error stream with the reason, as is a key the file cannot take. The payload's factor of a joint fit is not
+/// written either: on a cycle that picks and places, the trace holds the payload part of the time, and the factor is a
+/// share of that time as much as of the mass (the delta's cycle with 4 kg against its 3 kg came out at 0.72 times the
+/// config's). Comments of the written file are not kept and its keys come in alphabetical order (`Config::to_text`).
+fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas: f64) -> Result<(), Failure> {
+    let (entry, resolved) = machine_and_config(args)?;
+    // What the file holds: the config before the parts it names are put in, so that those stay named.
+    let (_, mut file) = named_config(args)?;
+    for assignment in args.options("--set") {
+        sim_components::set_config_text(entry, &mut file, assignment)?;
+    }
+    let mut written = Vec::new();
+    for row in rows {
+        let name = format!("{} {}", row.quantity, row.of);
+        if row.quantity != "stiffness_factor" {
+            eprintln!("{}", tr.tr_arg("cli-fit-write-lumped", &name));
+            continue;
+        }
+        // The factor and its error relative to the config's own, which is 1.
+        let (factor, error) = (row.fitted / row.config, row.error / row.config.abs());
+        match fitted_band(entry, &file, &resolved, &row.of, factor, error, sigmas) {
+            Ok(band) => written.push((row.of.clone(), band)),
+            Err(reason) => eprintln!("{}", tr.tr_arg(reason, &name)),
+        }
+    }
+    if written.is_empty() {
+        return Err(Failure("cli-fit-write-nothing", path.into()));
+    }
+    for (key, [value, low, high]) in &written {
+        sim_components::analysis::set_bounded(&mut file, key, *value)?;
+        let bound = format!("bounds.{key}");
+        // A bound the file has not got yet is added.
+        file.set_text_within(&format!("{bound} = [{low:?}, {high:?}]"), &file.clone(), &[bound.as_str()])?;
+    }
+    let text = file.to_text()?;
+    // What is written has to load again, with its bounds read.
+    let loaded = sim_components::load_config(entry, &text)?;
+    sim_components::analysis::bounds(&loaded)?;
+    std::fs::write(path, text).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))?;
+    eprintln!("{}", tr.tr_arg("cli-fit-write-done", path));
+    Ok(())
+}
+
+/// The value `factor` times that of `key` and its band `[low, high]` of `sigmas` times `error` (relative) either side,
+/// or the translation key of why it is not written: the file has no such key (`cli-fit-write-no-key`), a named part
+/// sets it (the file's value is not the one the fit used: `cli-fit-write-by-part`), or the fitted value or its error is
+/// not usable (`cli-fit-write-refused`). A value or bound the machine's readers refuse (a stiffness at or below 0) is
+/// pulled in to the nearest one they take.
+fn fitted_band(
+    entry: &'static MachineEntry,
+    file: &Config,
+    resolved: &Config,
+    key: &str,
+    factor: f64,
+    error: f64,
+    sigmas: f64,
+) -> Result<[f64; 3], &'static str> {
+    let (Ok(base), Ok(own)) = (resolved.f64(key), file.f64(key)) else { return Err("cli-fit-write-no-key") };
+    if (own - base).abs() > 1e-9 * base.abs() {
+        return Err("cli-fit-write-by-part");
+    }
+    let builds = |v: f64| {
+        let mut at = file.clone();
+        sim_components::analysis::set_bounded(&mut at, key, v).is_ok()
+            && sim_components::catalog::resolve(entry, &at).and_then(|r| (entry.build)(&r)).is_ok()
+    };
+    let value = base * factor;
+    if !(error.is_finite() && error > 0.0 && value.is_finite() && builds(value)) {
+        return Err("cli-fit-write-refused");
+    }
+    // Halving between the value and the bound found refused: the bound is the nearest one that builds.
+    let taken = |bound: f64| {
+        if builds(bound) {
+            return bound;
+        }
+        let (mut good, mut bad) = (value, bound);
+        for _ in 0..60 {
+            let middle = 0.5 * (good + bad);
+            if builds(middle) { good = middle } else { bad = middle }
+        }
+        good
+    };
+    let half = sigmas * base.abs() * error;
+    Ok([value, taken(value - half), taken(value + half)])
 }
 
 /// The trace named by `--trace`: through the mapping file `--map` (a vendor export; see
@@ -783,6 +1136,57 @@ fn check_dataset(args: &Args, tr: &Translations) -> Result<(), Failure> {
     Err(Failure("dataset-problem", format!("{} problems in {dir}", problems.len())))
 }
 
+/// `parameters <machine>`: per motor, the drive settings of the config with the SINAMICS parameter that takes each, and its
+/// value in that parameter's unit (`sim_components::parameters`). The config is read as the file states it, with
+/// `--set` applied: the drive part is read before the parts are resolved.
+fn parameters(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    use sim_components::parameters::{Error, Family, list_resolved};
+    // The drive part is read from the config as named (the parts are emptied once resolved); the values come from the
+    // resolved one with `--set` on top, as in every command.
+    let (entry, named) = named_config(args)?;
+    let (_, cfg) = machine_and_config(args)?;
+    let family = match args.option("--family") {
+        Some(text) => {
+            Some(Family::parse(text).ok_or_else(|| Failure("cli-error-bad-argument", format!("--family {text}")))?)
+        }
+        None => None,
+    };
+    let rows = list_resolved(entry, &named, &cfg, family).map_err(|e| match e {
+        Error::Config(e) => e.into(),
+        Error::NoDrive(motor) => Failure("cli-error-parameters-no-drive", motor),
+        Error::UnknownDrive(article) => Failure("cli-error-parameters-unknown-drive", article),
+        Error::NotRotaryServo(motor) => Failure("cli-error-parameters-not-servo", motor),
+    })?;
+    // Six significant digits, without the trailing zeros of a fixed notation.
+    let number = |x: f64| {
+        if x != 0.0 && !(1e-4..1e7).contains(&x.abs()) {
+            return format!("{x:.5e}");
+        }
+        let text = format!("{x:.6}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let mut out = output(args, "--out")?;
+    writeln!(out, "motor,key,value,unit,parameter,name,parameter_value,parameter_unit,basis").map_err(io)?;
+    for r in &rows {
+        let converted = r.parameter_value.map_or(String::new(), number);
+        writeln!(
+            out,
+            "{},{},{},{},{},{},{converted},{},{}",
+            r.motor,
+            r.key,
+            number(r.value),
+            r.unit,
+            r.parameter,
+            r.name,
+            r.parameter_unit,
+            r.basis.name()
+        )
+        .map_err(io)?;
+    }
+    eprintln!("{}", tr.tr("cli-parameters-note"));
+    Ok(())
+}
+
 fn io(e: std::io::Error) -> Failure {
     Failure("cli-error-io", e.to_string())
 }
@@ -814,7 +1218,14 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
         pareto: args.option("--pareto").is_some(),
         worst: args.flag("--worst"),
     };
-    let found = sim_components::analysis::optimise_cycle_with(entry, &cfg, &options)?;
+    // The failing checks of a cycle that fails as configured by their labels, a linear motor's speed in m/s.
+    let found = sim_components::analysis::optimise_cycle_with(entry, &cfg, &options).map_err(|e| match e.key() {
+        key @ "error-cycle-fails-already" => {
+            let linear = (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0));
+            Failure(key, sim_components::report::check_labels(e.detail(), linear, tr))
+        }
+        _ => Failure::from(e),
+    })?;
     let mut out = output(args, "--out")?;
     writeln!(out, "setting,before,after").map_err(io)?;
     writeln!(out, "cycle_s,{:.4},{:.4}", found.before.duration, found.after.duration).map_err(io)?;
@@ -914,16 +1325,29 @@ fn search_supplies_of(args: &Args, cfg: &Config) -> Result<Vec<&'static str>, Fa
     Ok(supplies)
 }
 
-/// `--drives paired|neighbours|all` and `--rank-by CRITERIA` of `search` and `compare-kinematics`.
+/// `--drives paired|neighbours|all` and `--rank-by CRITERIA` of `search` and `compare-kinematics`. With a price list
+/// (`--prices` of `search`) the default ranking is by price; `price` without one is refused.
 fn search_choices(
     args: &Args,
+    prices: bool,
 ) -> Result<(sim_components::catalog::Drives, Vec<(sim_components::search::Criterion, f64)>), Failure> {
+    use sim_components::search::Criterion;
     let drives = args.option("--drives").unwrap_or("paired");
     let drives = drives.parse().map_err(|_| Failure("cli-error-bad-argument", format!("--drives {drives}")))?;
-    let by = args.option("--rank-by").unwrap_or("cost");
+    let by = args.option("--rank-by").unwrap_or(if prices { "price" } else { "cost" });
     let by = sim_components::search::parse_ranking(by)
         .ok_or_else(|| Failure("cli-error-bad-argument", format!("--rank-by {by}")))?;
+    if !prices && by.iter().any(|(c, _)| *c == Criterion::Price) {
+        return Err(Failure("cli-error-prices-needed", String::new()));
+    }
     Ok((drives, by))
+}
+
+/// `--prices FILE` of `search`: the user's price list (`catalog::PriceList`).
+fn price_list(args: &Args) -> Result<Option<sim_components::catalog::PriceList>, Failure> {
+    let Some(file) = args.option("--prices") else { return Ok(None) };
+    let list = sim_components::catalog::PriceList::parse(&read(file)?);
+    list.map(Some).map_err(|(line, key, arg)| Failure(key, format!("{file}:{line}: {arg}")))
 }
 
 /// The duty mix of `search`: with several `--config FILE`, each file's config (with the parts and `--set` of the command
@@ -958,9 +1382,10 @@ fn duties(args: &Args, entry: &'static MachineEntry) -> Result<Vec<(Config, f64)
                 cfg.set_text(&format!("parts.{key} = {name:?}"))?;
             }
         }
+        before_parts(args, entry, &mut cfg)?;
         let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
         for assignment in args.options("--set") {
-            cfg.set_text(assignment)?;
+            sim_components::set_config_text(entry, &mut cfg, assignment)?;
         }
         out.push((cfg, weight));
     }
@@ -991,7 +1416,8 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     if motor.is_some() && axes {
         return Err(Failure("cli-usage", String::new()));
     }
-    let (drives, by) = search_choices(args)?;
+    let prices = price_list(args)?;
+    let (drives, by) = search_choices(args, prices.is_some())?;
     let robust: Option<usize> = args
         .option("--robust")
         .map(|n| n.parse().map_err(|_| Failure("cli-error-bad-argument", format!("--robust {n}"))))
@@ -999,6 +1425,22 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let started = std::time::Instant::now();
     let options = sim_components::catalog::Options { gearboxes, axes, motor, drives, duties: &duties };
     let mut found = sim_components::catalog::search(entry, &cfg, &supplies, &wanted, &options)?;
+    if let Some(list) = &prices {
+        let missing = sim_components::catalog::apply_prices(&mut found, list);
+        let unpriced = found.iter().filter(|c| !c.parts.is_empty() && c.price.is_none()).count();
+        if unpriced > 0 {
+            let names = missing.iter().take(10).cloned().collect::<Vec<_>>().join(", ");
+            eprintln!("{}", tr.tr_arg("cli-search-unpriced", &format!("{unpriced}: {names}")));
+        }
+        // A mix cannot weigh a candidate without a figure; a single price puts those last.
+        let passing_unpriced = found.iter().filter(|c| c.passes() && c.price.is_none()).count();
+        if by.len() > 1
+            && by.iter().any(|(c, _)| *c == sim_components::search::Criterion::Price)
+            && passing_unpriced > 0
+        {
+            return Err(Failure("cli-error-prices-mix", passing_unpriced.to_string()));
+        }
+    }
     rank_by(&mut found, &by);
     let on_front = front(&found);
     let robust = robust.map(|top| robust_ranking(entry, &cfg, &duties, &found, top));
@@ -1032,7 +1474,8 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let columns: String = checks.iter().map(|c| format!(",u_{c}")).collect();
     let robust_columns =
         if robust.is_some() { ",robust_rank,robust_result,robust_check,robust_utilisation" } else { "" };
-    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns},torque_unit").map_err(io)?;
+    let price_header = if prices.is_some() { ",price" } else { "" };
+    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg{price_header},result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns},torque_unit").map_err(io)?;
     // The unit of peak_torque_nm: N on a machine of linear motors (the first motor's kind), else N m.
     let torque_unit = if (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0)) { "N" } else { "N m" };
     for (rank, c) in found.iter().enumerate() {
@@ -1046,9 +1489,15 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
             )
         });
         let result = if c.passes() { "ok" } else { "FAIL" };
+        // Empty where the candidate has no price.
+        let price = if prices.is_some() {
+            format!(",{}", c.price.map_or(String::new(), |p| format!("{p:.2}")))
+        } else {
+            String::new()
+        };
         write!(
             out,
-            "{},{},{},{},{},{},{:.2},{:.2},{result},{check},{utilisation:.4},{peak:.4},{rise:.2}",
+            "{},{},{},{},{},{},{:.2},{:.2}{price},{result},{check},{utilisation:.4},{peak:.4},{rise:.2}",
             c.axis,
             c.article,
             c.gearbox,
@@ -1191,12 +1640,12 @@ fn compare_kinematics(args: &Args, _tr: &Translations) -> Result<(), Failure> {
     for entry in entries {
         let mut cfg = entry.config();
         for assignment in args.options("--set") {
-            cfg.set_text(assignment)?;
+            sim_components::set_config_text(entry, &mut cfg, assignment)?;
         }
         machines.push((entry, cfg));
     }
     let prefix = args.option("--series").unwrap_or("");
-    let (drives, by) = search_choices(args)?;
+    let (drives, by) = search_choices(args, false)?;
     let options =
         sim_components::catalog::Options { gearboxes: args.option("--gearboxes"), drives, ..Default::default() };
     // Each machine at its own supply, unless the command line names one.
@@ -1280,7 +1729,8 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let motors = (entry.build)(&cfg)?.motors().to_vec();
     // A path's clearance is in its run's verdict "collision"; the configured cycle's is told here.
     if args.option("--path").is_none() {
-        tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?);
+        let limit = cfg.non_negative("profile.min_clearance_m")?;
+        tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?, limit);
     }
     let cfg = path_instead(args, entry, cfg)?;
     if args.flag("--worst") {
@@ -1303,7 +1753,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
                     .collect::<Vec<_>>()
                     .join(";")
             };
-            let result = if v.ok { "ok" } else { "FAIL" };
+            let result = judged(v.ok);
             writeln!(
                 out,
                 "{},{},{},{},{result},{},{}",
@@ -1316,6 +1766,8 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
             )
             .map_err(io)?;
         }
+        tell_not_finite(tr, worst.iter().map(|w| &w.verdict));
+        tell_own_unchecked(tr, worst.iter().map(|w| &w.verdict));
         return out.flush().map_err(io);
     }
     // Whole numbers: at least one sample, and any seed from 0 on.
@@ -1340,7 +1792,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     };
     let row = |check: &str| bands.iter().find(|b| b.verdict.check == check).map(|b| b.verdict.value);
     tell_start(tr, row("thermal-warm-start"), row("thermal-cycle-repeat"));
-    let result = |ok: bool| if ok { "ok" } else { "FAIL" };
+    let result = judged;
     let mut out = output(args, "--out")?;
     let share = if samples.is_some() { ",pass_share" } else { "" };
     writeln!(
@@ -1368,7 +1820,20 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
         )
         .map_err(io)?;
     }
+    tell_not_finite(tr, bands.iter().map(|b| &b.verdict));
+    tell_own_unchecked(tr, bands.iter().map(|b| &b.verdict));
     out.flush().map_err(io)
+}
+
+/// On the error stream, where the verdicts have no row "self-collision": the machine's own parts were not checked (it
+/// has no two parts not joined at its start pose), which is not "clear", as "collision" is left out without obstacles.
+fn tell_own_unchecked<'a>(
+    tr: &Translations,
+    mut verdicts: impl Iterator<Item = &'a sim_components::analysis::Verdict>,
+) {
+    if !verdicts.any(|v| v.check == "self-collision") {
+        eprintln!("{}", tr.tr("cli-planned-own-none"));
+    }
 }
 
 /// `sensitivity <machine>`: the cycle with each parameter at its low and at its high bound of the config,
@@ -1767,7 +2232,7 @@ fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
         .map_err(io)?;
     for (run, margins) in &runs {
         for (motor, m) in motors.iter().zip(margins) {
-            let result = if m.stable() { "ok" } else { "FAIL" };
+            let result = judged(m.stable());
             if let Some(h) = m.hammering {
                 let at = format!("{:.0} Hz, {:.2} N m", h.frequency_hz, h.torque_nm);
                 let run = if run.is_empty() { String::new() } else { format!("{run}, ") };
@@ -1811,6 +2276,65 @@ fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
         .collect();
         eprintln!("{}: {}", tr.tr(motor.key), tr.tr_arg("loop-least-over-poses", &found.join(", ")));
     }
+    out.flush().map_err(io)
+}
+
+/// `tune <machine> [--phase-margin DEG] [--gain-margin DB] [--no-notch]`: per motor the largest velocity gain at which
+/// the least phase and gain margin over the cycle's poses meet the targets (35 degrees and 6 dB by default), with Tn and
+/// Kv following (`tune::velocity_loops`). One row per key (motor, key, before, after) with the least margins over the
+/// poses before and after, each with its pose; a row of a motor whose targets are not met says FAIL (exit code 1). On
+/// stderr: what the tuning did beyond the gain (a notch, a gain lowered by the joint check) and the `--set` words that
+/// make the tuned config. Nothing is written to a file.
+fn tune(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let defaults = sim_components::tune::Targets::default();
+    let targets = sim_components::tune::Targets {
+        phase_margin_deg: number(args, "--phase-margin", defaults.phase_margin_deg)?,
+        gain_margin_db: number(args, "--gain-margin", defaults.gain_margin_db)?,
+        notch: !args.flag("--no-notch"),
+    };
+    let tuned = sim_components::tune::velocity_loops(entry, &cfg, &targets)?;
+    let mut out = output(args, "--out")?;
+    writeln!(
+        out,
+        "motor,key,before,after,phase_before_deg,phase_before_pose,gain_before_db,gain_before_pose,\
+         phase_after_deg,phase_after_pose,gain_after_db,gain_after_pose,result"
+    )
+    .map_err(io)?;
+    let pose = |p: &str| if p.is_empty() { "start.pose".to_string() } else { p.to_string() };
+    let cell = |x: f64| if x.is_nan() { String::new() } else { format!("{x:.2}") };
+    for m in &tuned.motors {
+        let (b, a) = (&m.before_least, &m.after_least);
+        let margins = format!(
+            "{},{},{},{},{},{},{},{}",
+            cell(b.phase_deg),
+            pose(&b.phase_pose),
+            cell(b.gain_db),
+            pose(&b.gain_pose),
+            cell(a.phase_deg),
+            pose(&a.phase_pose),
+            cell(a.gain_db),
+            pose(&a.gain_pose)
+        );
+        let result = judged(m.met);
+        writeln!(out, "{},{},{:?},{:?},{margins},{result}", m.id, m.kp_key, m.before.kp, m.after.kp).map_err(io)?;
+        if m.after.kv != m.before.kv {
+            writeln!(out, "{},{},{:?},{:?},{margins},{result}", m.id, m.kv_key, m.before.kv, m.after.kv).map_err(io)?;
+        }
+        if m.lowered_in_joint_check {
+            eprintln!("{}", tr.tr_arg("tune-lowered", &m.id));
+        }
+    }
+    for n in &tuned.notches {
+        let id = &tuned.motors[n.motor].id;
+        let at = format!("{id}: {:.1} Hz, {:.1} Hz, {:.2}", n.frequency_hz, n.bandwidth_hz, n.gain_factor);
+        eprintln!("{}", tr.tr_arg("tune-notch", &at));
+    }
+    if !tuned.met {
+        eprintln!("{}", tr.tr("tune-not-met"));
+    }
+    let words: Vec<String> = tuned.settings().iter().flat_map(|s| ["--set".to_string(), s.clone()]).collect();
+    eprintln!("{}", words.join(" "));
     out.flush().map_err(io)
 }
 
@@ -2006,10 +2530,11 @@ fn stop(args: &Args, tr: &Translations) -> Result<(), Failure> {
         eprintln!("{}", tr.tr_arg("cli-stop-worst", &format!("{:.4} s ({})", worst.at, moment(worst.moment))));
     }
     for v in &study.verdicts {
-        let result = if v.ok { "ok" } else { "FAIL" };
+        let result = judged(v.ok);
         let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
         eprintln!("{}", tr.tr_arg("cli-stop-verdict", &detail));
     }
+    tell_not_finite(tr, &study.verdicts);
     out.flush().map_err(io)
 }
 
@@ -2069,10 +2594,11 @@ fn accuracy(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let detail = format!("AP {:.3e}, RP {:.3e}, vAP {:.3e}", t.accuracy, t.repeatability, t.direction_variation);
     eprintln!("{}", tr.tr_arg("cli-accuracy-tool", &detail));
     for v in &study.verdicts {
-        let result = if v.ok { "ok" } else { "FAIL" };
+        let result = judged(v.ok);
         let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
         eprintln!("{}", tr.tr_arg("cli-accuracy-verdict", &detail));
     }
+    tell_not_finite(tr, &study.verdicts);
     out.flush().map_err(io)
 }
 
@@ -2136,7 +2662,7 @@ fn report(args: &Args, tr: &Translations) -> Result<(), Failure> {
         report.html(args.option("--lang").unwrap_or("en")).into_bytes()
     };
     std::fs::write(path, bytes).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))?;
-    eprintln!("{}", tr.tr_arg(if report.passed { "cli-report-pass" } else { "cli-report-fail" }, path));
+    eprintln!("{}", tr.tr_arg(if judged(report.passed) == "ok" { "cli-report-pass" } else { "cli-report-fail" }, path));
     Ok(())
 }
 

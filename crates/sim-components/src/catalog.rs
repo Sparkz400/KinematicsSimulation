@@ -32,6 +32,8 @@ const TABLES: &[(&str, &str)] = &tables![
     "siemens/s1_curves_s210.csv",
     "siemens/encoders_1fk2_1ft2.csv",
     "siemens/dc_link_trip_s120.csv",
+    "siemens/derating_s210.csv",
+    "siemens/derating_s120.csv",
     "siemens/motors_1fk2_s120.csv",
     "siemens/motors_1ft2_s120.csv",
     "siemens/motors_s120.csv",
@@ -41,6 +43,8 @@ const TABLES: &[(&str, &str)] = &tables![
     "siemens/braking_s210.csv",
     "siemens/braking_s120.csv",
     "siemens/dc_link_measured.csv",
+    "siemens/parameters_s120.csv",
+    "siemens/parameters_s210.csv",
     "siemens/gearbox_nrb.csv",
     "siemens/gearbox_nrk.csv",
     "siemens/gearbox_nlc.csv",
@@ -86,6 +90,8 @@ const TABLES: &[(&str, &str)] = &tables![
     "yaskawa/motor_shafts.csv",
     "hiwin/ball_screws.csv",
     "hiwin/linear_guides.csv",
+    "rexroth/linear_guides.csv",
+    "thk/linear_guides.csv",
     "siemens/linear_motors_1fn3.csv",
     "beckhoff/linear_motors_al8000.csv",
     "festo/belt_axes_egc.csv",
@@ -97,7 +103,7 @@ const TABLES: &[(&str, &str)] = &tables![
 /// The tables read from a directory by `use_directory`; unset, the compiled-in ones are used.
 static LOADED: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
 
-fn table(name: &str) -> &'static str {
+pub(crate) fn table(name: &str) -> &'static str {
     let compiled = || TABLES.iter().find(|(n, _)| *n == name).map(|(_, text)| *text).expect("a table of TABLES");
     LOADED.get().and_then(|t| t.get(name).copied()).unwrap_or_else(compiled)
 }
@@ -124,12 +130,43 @@ pub fn use_directory(dir: &std::path::Path) -> Result<(), ConfigError> {
         Some(SCHEMA_VERSION) => {}
         other => return Err(ConfigError::Part("error-catalog-version", format!("{other:?}, {}", dir.display()))),
     }
+    // Checked all before anything is kept, so a refused directory leaks nothing.
+    let mut texts = Vec::new();
+    for &(name, compiled) in TABLES {
+        let text = read(name)?;
+        check_table(name, &text, compiled)?;
+        texts.push((name, text));
+    }
     let mut loaded = HashMap::new();
-    for &(name, _) in TABLES {
-        // Read once and kept for the life of the process, as the compiled-in tables are.
-        loaded.insert(name, &*Box::leak(read(name)?.into_boxed_str()));
+    for (name, text) in texts {
+        // Kept for the life of the process, as the compiled-in tables are.
+        loaded.insert(name, &*Box::leak(text.into_boxed_str()));
     }
     LOADED.set(loaded).map_err(|_| ConfigError::Part("error-catalog-read", "the catalogue was already chosen".into()))
+}
+
+/// Refuses a CSV table (not `catalog.toml`) whose header lacks a column of the compiled-in table of the same name, or
+/// that has a row with another number of fields than its header. The readers index rows by column name and panic on
+/// a missing one, so this is the one place that guards them. The required columns are the compiled-in header's, so
+/// they cannot drift from the tables the code was written against; a column the code never reads is required too.
+fn check_table(name: &str, text: &str, compiled: &str) -> Result<(), ConfigError> {
+    if !name.ends_with(".csv") {
+        return Ok(());
+    }
+    let fail = |what: String| ConfigError::Part("error-catalog-read", format!("{name}: {what}"));
+    // As `rows` reads them: notes and blank lines passed over.
+    let mut lines = text.lines().enumerate().filter(|(_, l)| !l.starts_with('#') && !l.trim().is_empty());
+    let header: Vec<&str> = lines.next().map_or(Vec::new(), |(_, l)| l.split(',').collect());
+    let wanted = compiled.lines().find(|l| !l.starts_with('#')).unwrap_or("");
+    if let Some(missing) = wanted.split(',').find(|c| !header.contains(c)) {
+        return Err(fail(format!("missing column \"{missing}\"")));
+    }
+    match lines.find(|(_, l)| l.split(',').count() != header.len()) {
+        Some((i, l)) => {
+            Err(fail(format!("line {}: {} fields, the header has {}", i + 1, l.split(',').count(), header.len())))
+        }
+        None => Ok(()),
+    }
 }
 
 /// The supplies a motor can be named for: the S210 data at 230 V or 400 V, or the motor on a SINAMICS S120
@@ -218,11 +255,11 @@ fn vendor_rows(kind: &str, vendor: &str, line: f64) -> Vec<Row> {
         .collect()
 }
 
-type Row = &'static HashMap<&'static str, &'static str>;
+pub(crate) type Row = &'static HashMap<&'static str, &'static str>;
 
 /// The rows of a catalogue file; lines starting with '#' are notes. Each table is parsed once and kept for the life of
 /// the process, as its text is: a motor search reads the same tables for every motor it tries.
-fn rows(text: &'static str) -> Vec<Row> {
+pub(crate) fn rows(text: &'static str) -> Vec<Row> {
     type Parsed = Vec<((usize, usize), &'static [HashMap<&'static str, &'static str>])>;
     static PARSED: Mutex<Parsed> = Mutex::new(Vec::new());
     let key = (text.as_ptr() as usize, text.len());
@@ -230,7 +267,8 @@ fn rows(text: &'static str) -> Vec<Row> {
     let table = match parsed.iter().find(|(k, _)| *k == key) {
         Some(&(_, table)) => table,
         None => {
-            let mut lines = text.lines().filter(|l| !l.starts_with('#'));
+            // A blank line (an editor's at the end) is no row: one would lack every column but the first.
+            let mut lines = text.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty());
             let header: Vec<&str> = lines.next().unwrap_or("").split(',').collect();
             let table: &'static [_] =
                 Vec::leak(lines.map(|line| header.iter().copied().zip(line.split(',')).collect()).collect());
@@ -962,6 +1000,11 @@ pub fn estimated_data(article: &str, supply: &str, drive: &str) -> Vec<&'static 
 /// And `ratings.drive_base_load_current_a`, the current the drive falls back to when its thermal image trips
 /// (effects.drive_overload): an S120 Motor Module's from `motor_modules_s120.csv`; for an S210 converter, whose base load
 /// current Siemens does not publish, `S210_BASE_LOAD_SHARE` of its rated current [estimate].
+///
+/// The rated and the base load current are those of the drive's rated conditions, derated by `drive_derating` for the
+/// installation conditions the config gives (`ratings.drive_ambient_c`, `drive_altitude_m`, `drive_pulse_frequency_hz`;
+/// absent: the rated ones, and every figure as the catalogue has it). The maximum current is not derated. A drive
+/// of another maker, whose rows state no derating, is refused when the config gives a condition.
 pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), ConfigError> {
     // An S210 brakes into a resistor of its own, the axes of an S120 line-up into its one Braking Module.
     let braking_module = |cfg: &mut Config, on: bool| {
@@ -1068,9 +1111,169 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         set_if_present(cfg, "ratings.dc_link_capacitance_uf", capacitance)?;
     }
     let ((rated, max), base) = rated.zip(max).zip(base).ok_or_else(|| unknown("drive", article))?;
+    // The maximum current stays as printed: Siemens does not say whether its derating reaches it (`drive_derating`).
+    let factor = drive_derating(cfg, article)?;
+    let (rated, base) = (rated * factor, base * factor);
     set_if_present(cfg, "ratings.drive_rated_current_a", rated)?;
     set_if_present(cfg, "ratings.drive_base_load_current_a", base)?;
     set_if_present(cfg, "ratings.drive_max_current_a", max)
+}
+
+/// The keys of a drive's installation conditions in `[ratings]`: the ambient temperature of the drive itself (the
+/// cabinet's air inlet, not the motor's), the installation altitude and the pulse frequency. A config that lacks one has
+/// the drive at its rated condition (40 degC, 1000 m, the rated pulse frequency).
+pub const DRIVE_CONDITION_KEYS: [&str; 3] =
+    ["ratings.drive_ambient_c", "ratings.drive_altitude_m", "ratings.drive_pulse_frequency_hz"];
+
+/// The first installation condition (`DRIVE_CONDITION_KEYS`) a config gives though it names no catalogue drive in
+/// `[parts]` or a motor's `[parts.<id>]`: its drive is hand-entered, the condition would derate nothing and the drive
+/// would be judged at its rated condition. Read from the config as written: `resolve` empties the names.
+pub fn condition_without_drive(cfg: &Config) -> Option<&'static str> {
+    let named = |v: Option<&toml::Value>| v.and_then(|v| v.as_str()).is_some_and(|name| !name.is_empty());
+    let parts = cfg.get("parts").ok().and_then(|p| p.as_table());
+    let any = parts.is_some_and(|p| named(p.get("drive")) || p.values().any(|own| named(own.get("drive"))));
+    DRIVE_CONDITION_KEYS.into_iter().find(|key| !any && cfg.get(key).is_ok())
+}
+
+/// Linear interpolation through `points` (x, y), the value of the first or last point beyond them; 1 for no points.
+fn interpolate(mut points: Vec<(f64, f64)>, x: f64) -> f64 {
+    points.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (Some(first), Some(last)) = (points.first().copied(), points.last().copied()) else { return 1.0 };
+    if x <= first.0 {
+        return first.1;
+    }
+    for pair in points.windows(2) {
+        if x <= pair[1].0 {
+            return pair[0].1 + (pair[1].1 - pair[0].1) * (x - pair[0].0) / (pair[1].0 - pair[0].0);
+        }
+    }
+    last.1
+}
+
+/// The y of the first of `points` (x, y) whose x is at least `x`, the last point's beyond them; 1 for no points.
+fn up_to(mut points: Vec<(f64, f64)>, x: f64) -> f64 {
+    points.sort_by(|a, b| a.0.total_cmp(&b.0));
+    points.iter().find(|p| x <= p.0).or(points.last()).map_or(1.0, |p| p.1)
+}
+
+/// The (x, y) points of one `quantity` of a derating table, x from the column `x`, y the output current factor.
+fn derating_points(table_rows: &[Row], quantity: &str, x: &str) -> Vec<(f64, f64)> {
+    table_rows
+        .iter()
+        .filter(|r| r["quantity"] == quantity)
+        .filter_map(|r| number(r, x).zip(number(r, "output_current_factor")))
+        .collect()
+}
+
+fn first_x(points: &[(f64, f64)]) -> f64 {
+    points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min)
+}
+
+fn last_x(points: &[(f64, f64)]) -> f64 {
+    points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// The share of its rated output current a catalogue drive gives at the installation conditions of the config
+/// (`DRIVE_CONDITION_KEYS`); 1 for a config that gives none, and for an article that is neither an S210 converter nor an
+/// S120 Motor Module. A drive of another maker with a condition given is refused (`error-drive-derating-none`): its rows
+/// state no derating, and silently ignoring the condition would judge it at rated conditions.
+///
+/// S210 (`derating_s210.csv`, operating instructions Table 12-9): the table of altitude against ambient temperature,
+/// an altitude by the row "up to" the next table altitude, the ambient interpolated linearly between the columns (as
+/// Siemens' rule trades 5 K for 10 % of the current), the pulse frequency fixed at 8 kHz. S120 booksize Motor Module
+/// (`derating_s120.csv`): the factors of altitude (10 % per 1000 m above 1000 m), ambient temperature (2.67 % per K above
+/// 40 degC) and pulse frequency (a curve by module group), multiplied. Siemens does not say how they combine; the product is
+/// this simulator's assumption on the safe side. Of Siemens' two ways to trade altitude (reduce the current by 10 % per
+/// 1000 m, or the ambient by 5 K per 1000 m) the current reduction is implemented, not both. Refused, naming the key
+/// (`error-drive-derating-range`): above 4000 m, above the highest ambient (S210 50 degC, S120 55 degC), below 0 degC, an
+/// S210 pulse frequency other than 8 kHz, an S120 one above 16 kHz or not above 0, and an ambient above 45 degC at 16 kHz.
+pub fn drive_derating(cfg: &Config, article: &str) -> Result<f64, ConfigError> {
+    let given = |key: &str| -> Result<Option<f64>, ConfigError> {
+        if cfg.get(key).is_ok() { cfg.f64(key).map(Some) } else { Ok(None) }
+    };
+    let [ambient_key, altitude_key, pulse_key] = DRIVE_CONDITION_KEYS;
+    let (ambient, altitude, pulse) = (given(ambient_key)?, given(altitude_key)?, given(pulse_key)?);
+    let refused = |key: &str| ConfigError::Part("error-drive-derating-range", key.into());
+    if ambient.is_some_and(|a| a < 0.0) {
+        return Err(refused(ambient_key));
+    }
+    if rows(table("siemens/converters_s210.csv")).iter().any(|r| r["part_number"] == article) {
+        let all = rows(table("siemens/derating_s210.csv"));
+        let grid: Vec<(f64, f64, f64)> = all
+            .iter()
+            .filter(|r| r["quantity"] == "altitude_ambient")
+            .filter_map(|r| {
+                Some((number(r, "ambient_c")?, number(r, "altitude_m")?, number(r, "output_current_factor")?))
+            })
+            .collect();
+        let mut ambients: Vec<f64> = grid.iter().map(|g| g.0).collect();
+        ambients.sort_by(f64::total_cmp);
+        ambients.dedup();
+        // The factor by altitude at each ambient temperature of the table.
+        let columns: Vec<(f64, Vec<(f64, f64)>)> =
+            ambients.iter().map(|&t| (t, grid.iter().filter(|g| g.0 == t).map(|g| (g.1, g.2)).collect())).collect();
+        let altitudes: Vec<(f64, f64)> = grid.iter().map(|g| (g.1, g.2)).collect();
+        let fixed = derating_points(&all, "pulse_frequency", "pulse_frequency_hz").first().map_or(f64::NAN, |p| p.0);
+        if altitude.is_some_and(|h| h > last_x(&altitudes)) {
+            return Err(refused(altitude_key));
+        }
+        if ambient.is_some_and(|a| ambients.last().is_some_and(|top| a > *top)) {
+            return Err(refused(ambient_key));
+        }
+        if pulse.is_some_and(|p| (p - fixed).abs() > 0.5) {
+            return Err(refused(pulse_key));
+        }
+        let h = altitude.unwrap_or_else(|| first_x(&altitudes));
+        // The rows are "up to 2000 m" and so on: an altitude takes the row of the next table altitude at or above it.
+        let across: Vec<(f64, f64)> = columns.into_iter().map(|(t, points)| (t, up_to(points, h))).collect();
+        return Ok(interpolate(across.clone(), ambient.unwrap_or_else(|| first_x(&across))));
+    }
+    if let Some(module) = rows(table("siemens/motor_modules_s120.csv")).iter().find(|r| r["part_number"] == article) {
+        let all = rows(table("siemens/derating_s120.csv"));
+        // A module with curve rows of its own (the 200 A one) uses those alone, every other the rows without a part.
+        let own: Vec<Row> = all.iter().filter(|r| r["part_number"] == module["part_number"]).copied().collect();
+        let group: Vec<Row> =
+            if own.is_empty() { all.iter().filter(|r| r["part_number"].is_empty()).copied().collect() } else { own };
+        let altitudes = derating_points(&all, "altitude", "altitude_m");
+        let ambients = derating_points(&all, "ambient", "ambient_c");
+        let pulses = derating_points(&group, "pulse_frequency", "pulse_frequency_hz");
+        if altitude.is_some_and(|h| h > last_x(&altitudes)) {
+            return Err(refused(altitude_key));
+        }
+        if ambient.is_some_and(|a| a > last_x(&ambients)) {
+            return Err(refused(ambient_key));
+        }
+        if pulse.is_some_and(|p| p <= 0.0 || p > last_x(&pulses)) {
+            return Err(refused(pulse_key));
+        }
+        // At the highest pulse frequency the ambient is limited (the limit row's pulse frequency and ambient).
+        for limit in all.iter().filter(|r| r["quantity"] == "ambient_limit") {
+            if let (Some(p), Some(a), Some(at), Some(most)) =
+                (pulse, ambient, number(limit, "pulse_frequency_hz"), number(limit, "ambient_c"))
+                && p >= at
+                && a > most
+            {
+                return Err(refused(ambient_key));
+            }
+        }
+        let (h, a, p) = (
+            altitude.unwrap_or_else(|| first_x(&altitudes)),
+            ambient.unwrap_or_else(|| first_x(&ambients)),
+            pulse.unwrap_or_else(|| first_x(&pulses)),
+        );
+        return Ok(interpolate(altitudes, h) * interpolate(ambients, a) * interpolate(pulses, p));
+    }
+    match DRIVE_CONDITION_KEYS.iter().find(|key| cfg.get(key).is_ok()) {
+        Some(key) => Err(ConfigError::Part("error-drive-derating-none", (*key).into())),
+        None => Ok(1.0),
+    }
+}
+
+/// `estimated_data`'s "drive-derating": the drive's rated and base load current are derated by installation conditions
+/// that are not the rated ones. Siemens states the factors per condition, not how they combine (they are multiplied),
+/// and not whether the maximum current is derated too (it is not).
+pub fn estimated_derating(cfg: &Config, drive: &str) -> Vec<&'static str> {
+    if drive_derating(cfg, drive).is_ok_and(|factor| factor != 1.0) { vec!["drive-derating"] } else { Vec::new() }
 }
 
 /// The DC link of another maker's drive (`<vendor>/drives_*.csv`), each value only where the row gives it and the config
@@ -1318,6 +1521,11 @@ fn kind(cfg: &Config) -> Option<Kind> {
     }
 }
 
+/// The travel (m) a belt axis's slide load is screened for (`AxisData::slide_load_n`): the 5000 km Festo rates the
+/// ELGA-TB-KF and EGC-TB-KF for. A row rated for another (`dynamic_load_distance_m`, the RF's 10000 km) is converted to
+/// it by the cube law; a row without the column (Bahr, Rexroth) is taken as printed.
+const BELT_AXIS_LOAD_DISTANCE_M: f64 = 5.0e6;
+
 /// The catalogue's figures of an axis by name, as `apply_axis` and the axis search use them.
 #[derive(Debug, Clone)]
 struct AxisData {
@@ -1359,6 +1567,15 @@ pub fn axis_names() -> Vec<String> {
     let mut out = festo_sizes();
     out.extend(belt_axis_rows().iter().map(|(_, r)| format!("{}-{}", r["series"], r["size"])));
     out
+}
+
+/// The standard belts of the catalogue as `apply_belt` takes them: profile and width in mm, "AT5-25", one per row of
+/// `megadyne/belts.csv` (the Gates table is not read by name). Other widths are taken too, interpolated.
+pub fn belt_names() -> Vec<String> {
+    rows(table("megadyne/belts.csv"))
+        .iter()
+        .filter_map(|r| Some(format!("{}-{}", r["profile"], (number(r, "width_m")? * 1e9).round() / 1e6)))
+        .collect()
 }
 
 /// The rows of the belt axes other than the EXCT (`festo/belt_axes.csv`, with its torque formula): Bahr's, then the
@@ -1476,7 +1693,11 @@ fn axis_data(name: &str) -> Option<AxisData> {
         // Bahr gives the peak feed force; Festo and Rexroth the torque at the pulley as well, which holds where given.
         pulley_torque: number(r, "max_pulley_torque_nm").unwrap_or(number(r, "feed_force_peak_n")? * radius),
         payload_kg: None,
-        slide_load_n: number(r, "fz_dynamic_n"),
+        // On the 5000 km basis of Festo's KF guides: a load rated for another travel (RF: 10000 km) by the cube law of
+        // Festo's own graph of the load comparison factor against the service life.
+        slide_load_n: number(r, "fz_dynamic_n").map(|fz| {
+            fz * number(r, "dynamic_load_distance_m").map_or(1.0, |d| (d / BELT_AXIS_LOAD_DISTANCE_M).cbrt())
+        }),
         max_speed: number(r, "max_speed_m_s")?,
         max_acceleration: if bahr { None } else { number(r, "max_acceleration_m_s2") },
         moved,
@@ -1757,6 +1978,19 @@ pub fn motor_config(cfg: &Config, id: &str) -> Result<Config, ConfigError> {
     Ok(out)
 }
 
+/// The part `key` ("motor", "gearbox" or "drive") that motor `id` of an unresolved config has: the one its own
+/// `[parts.<id>]` names; else none where it has values of its own for that part (`[motor.<id>]`, `[gearbox.<id>]`: not
+/// a catalogue part); else `shared`.
+fn part_of(cfg: &Config, id: &str, key: &str, shared: &str) -> String {
+    let own = cfg.get(&format!("parts.{id}.{key}")).ok().and_then(|v| v.as_str()).filter(|n| !n.is_empty());
+    let by_hand = key != "drive" && cfg.get(&format!("{key}.{id}")).is_ok_and(|v| v.is_table());
+    match own.filter(|_| !id.is_empty()) {
+        Some(own) => own.to_string(),
+        None if by_hand && !id.is_empty() => String::new(),
+        None => shared.to_string(),
+    }
+}
+
 /// The config with the catalogue values of the parts it names: `[parts]` with `motor = "<article>"`,
 /// `motor_supply` (`SUPPLIES`), `gearbox = "<size-frame-ratio>"`, `drive = "<article>"`, `belt = "<profile-width>"`
 /// and `axis = "<name>"`, "" for none. A named part overwrites the numbers the config has for it, and the velocity
@@ -1788,6 +2022,13 @@ pub struct Candidate {
     /// names, kg. Motor and gearbox times the number of motors that take it (not those with a motor of their own,
     /// `[motor.<id>]` or `[parts.<id>]`; one for `search_motor`), and the axis at the config's strokes.
     pub cost: f64,
+    /// The parts the combination buys, as the search's table spells them, with how many of each: every motor's motor,
+    /// gearbox and drive (the candidate's where it takes the shared ones, its own `[parts.<id>]` where it has them;
+    /// none where the config has hand-entered values), the axis and the belt; the parts a config keeps are named too.
+    /// For one motor (`search_motor`) that motor's alone. Empty for an axis ruled out before any motor was tried.
+    pub parts: Vec<(String, f64)>,
+    /// The user's price for `parts` (`apply_prices`); `None` without a price list or where a part has no price in it.
+    pub price: Option<f64>,
     /// The cycle and its verdicts; `None` where the cycle was not run, with the reason in `refused`. With a duty mix
     /// (`Options::duties`) the first duty's cycle and the verdicts of the mix (`search::mix_verdicts`).
     pub result: Option<(CycleLoad, Vec<Verdict>)>,
@@ -2351,25 +2592,9 @@ fn run_jobs(
     jobs: Vec<Job>,
     mut out: Vec<Candidate>,
 ) -> Vec<Candidate> {
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let work = || {
-        let mut done = Vec::new();
-        while let Some(job) = jobs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-            done.push(try_job(entry, cfg, duties, supply, job));
-        }
-        done
-    };
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len().max(1));
-    // One processor, or none known (WebAssembly, which cannot start threads): on this thread.
-    let found: Vec<Candidate> = if threads <= 1 {
-        work().into_iter().flatten().collect()
-    } else {
-        std::thread::scope(|scope| {
-            let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
-            workers.into_iter().flat_map(|w| w.join().expect("a run of the search panicked")).flatten().collect()
-        })
-    };
-    out.extend(found);
+    // As the analyses' batches: counted in the current job and stopped by its cancel.
+    let found = crate::analysis::on_all_cores(jobs.len(), |i| try_job(entry, cfg, duties, supply, &jobs[i]));
+    out.extend(found.into_iter().flatten());
     rank(&mut out);
     out
 }
@@ -2390,6 +2615,53 @@ pub fn rank(found: &mut [Candidate]) {
             .then(a.gearbox.cmp(&b.gearbox))
             .then(a.drive.cmp(b.drive))
     });
+}
+
+/// The user's prices by part number (`--prices`): a CSV `part_number,price` with the header, `#` notes and blank lines
+/// passed over as the catalogue's tables are. The currency is the user's; the file carries none. No shipped table has
+/// a price (`docs/catalogue.md`).
+pub struct PriceList(HashMap<String, f64>);
+
+impl PriceList {
+    /// Reads the text; on a fault the line (1-based), the message key and the argument it names (the part number or
+    /// the field), for the front end to put in words.
+    pub fn parse(text: &str) -> Result<Self, (usize, &'static str, String)> {
+        let mut lines = text.lines().enumerate().filter(|(_, l)| !l.starts_with('#') && !l.trim().is_empty());
+        let (at, header) = lines.next().unwrap_or((0, ""));
+        if header.split(',').map(str::trim).ne(["part_number", "price"]) {
+            return Err((at + 1, "cli-error-prices-header", header.to_string()));
+        }
+        let mut prices = HashMap::new();
+        for (i, line) in lines {
+            let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+            let [part, price] = fields[..] else { return Err((i + 1, "cli-error-prices-fields", line.to_string())) };
+            if part.is_empty() {
+                return Err((i + 1, "cli-error-prices-fields", line.to_string()));
+            }
+            let price = price.parse::<f64>().ok().filter(|p| *p > 0.0 && p.is_finite());
+            let price = price.ok_or_else(|| (i + 1, "cli-error-prices-value", format!("{part}: {}", fields[1])))?;
+            if prices.insert(part.to_string(), price).is_some() {
+                return Err((i + 1, "cli-error-prices-duplicate", part.to_string()));
+            }
+        }
+        Ok(Self(prices))
+    }
+}
+
+/// Sets each candidate's price (`Candidate::price`): the sum over its parts of the count times the list's price, only
+/// where every part has one. Returns the part numbers the list lacks, each once, in order of first need.
+pub fn apply_prices(found: &mut [Candidate], list: &PriceList) -> Vec<String> {
+    let mut missing: Vec<String> = Vec::new();
+    for c in found {
+        c.price = c.parts.iter().map(|(name, count)| list.0.get(name).map(|p| p * count)).sum::<Option<f64>>();
+        c.price = c.price.filter(|_| !c.parts.is_empty());
+        for (name, _) in c.parts.iter().filter(|(name, _)| !list.0.contains_key(name)) {
+            if !missing.contains(name) {
+                missing.push(name.clone());
+            }
+        }
+    }
+    missing
 }
 
 /// A job's config made from a duty's config `base`: the axis named, then the parts put in as `with_named` (or, for one
@@ -2445,10 +2717,53 @@ fn judge(entry: &MachineEntry, cfg: &Config) -> Result<(CycleLoad, Vec<Verdict>)
 fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply: &str, job: &Job) -> Option<Candidate> {
     // Not offered at this supply, or a part the config cannot take.
     let (with_parts, motors) = job_config(entry, cfg, supply, job).ok()?;
-    // The gearbox the motor drives through: the candidate's, else its own (`[parts.<id>]` for one motor).
-    let own = if job.motor.is_empty() { Ok(cfg.clone()) } else { motor_config(cfg, &job.motor) };
-    let own_gearbox = own.ok().and_then(|own| Some(Parts::of(&own).ok()?.gearbox.to_string())).unwrap_or_default();
-    let gearbox = if job.gearbox.is_empty() { own_gearbox.as_str() } else { job.gearbox.as_str() };
+    let shared = Parts::of(cfg).unwrap_or_default();
+    let or = |candidate: &str, config: &str| if candidate.is_empty() { config } else { candidate }.to_string();
+    // Each motor's motor, gearbox and drive: the candidate's in place of the shared ones, a motor's own
+    // `[parts.<id>]` kept; for one motor (`search_motor`) that motor's alone, the candidate's in place of its own.
+    let trains: Vec<[String; 3]> = if job.motor.is_empty() {
+        let ids = (entry.build)(&with_parts).map(|m| m.motors().iter().map(|m| m.id.to_string()).collect());
+        let (gearbox, drive) = (or(&job.gearbox, shared.gearbox), or(job.drive, shared.drive));
+        let ids: Vec<String> = ids.unwrap_or_default();
+        ids.iter()
+            .map(|id| {
+                [
+                    part_of(cfg, id, "motor", job.article),
+                    part_of(cfg, id, "gearbox", &gearbox),
+                    part_of(cfg, id, "drive", &drive),
+                ]
+            })
+            .collect()
+    } else {
+        let id = job.motor.as_str();
+        let own = |key: &str, candidate: &str, config: &str| or(candidate, &part_of(cfg, id, key, config));
+        vec![[
+            job.article.to_string(),
+            own("gearbox", &job.gearbox, shared.gearbox),
+            own("drive", job.drive, shared.drive),
+        ]]
+    };
+    // The gearbox the candidate's motor drives through (the shared one where several take it).
+    let gearbox = match &trains[..] {
+        [one] if !job.motor.is_empty() => one[1].clone(),
+        _ => or(&job.gearbox, shared.gearbox),
+    };
+    let gearbox = gearbox.as_str();
+    // The drives the motors run on: the candidate's, or the config's where it keeps that (derated just the same).
+    let drives: Vec<String> = trains.iter().map(|train| train[2].clone()).collect();
+    // What the combination buys, for a price list: every motor's parts, and the axis and belt (a candidate's or the
+    // config's) where every motor is searched; a mechanical axis by its screws and guide carriages.
+    let axis = or(&job.axis, shared.axis);
+    let axis = mechanics::mech_axis_parts(&axis).unwrap_or_else(|| vec![(axis, 1.0)]);
+    let whole = axis.into_iter().chain([(shared.belt.to_string(), 1.0)]).filter(|_| job.motor.is_empty());
+    let mut parts: Vec<(String, f64)> = Vec::new();
+    let each = trains.into_iter().flatten().map(|name| (name, 1.0));
+    for (name, n) in each.chain(whole).filter(|(name, _)| !name.is_empty()) {
+        match parts.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, count)) => *count += n,
+            None => parts.push((name, n)),
+        }
+    }
     // An unknown mass counts 0 (not NaN, which sorted the row last); `estimated` says so ("gearbox-mass").
     let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(0.0) };
     let mass = motor_mass_for(cfg, job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
@@ -2461,6 +2776,7 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
         motor: job.motor.clone(),
         mass,
         cost: motors * mass + job.axis_weight,
+        parts,
         ..Candidate::default()
     };
     // Every duty of the mix, with the same parts; the first is the config searched on.
@@ -2477,6 +2793,9 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
         }
     }
     let mut estimated = estimated_data(job.article, supply, job.drive);
+    if drives.iter().any(|drive| !estimated_derating(&with_parts, drive).is_empty()) {
+        estimated.push("drive-derating");
+    }
     if !gearbox.is_empty() {
         estimated.extend(estimated_gearbox_data(gearbox));
     }
@@ -2697,6 +3016,22 @@ pub fn with_motor_part(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_compiled_in_tables_pass_the_check_of_a_catalogue_directory() {
+        // Shows the check accepts what the code was written against, and finds a short row and a missing column.
+        for &(name, text) in TABLES {
+            check_table(name, text, text).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
+        let (name, text) = TABLES[0];
+        let short = format!("{text}\nx,y\n");
+        assert!(check_table(name, &short, text).is_err());
+        // Blank lines, at the end as an editor leaves them or between rows, and Windows line ends are no error.
+        let blank = format!("{}\n\n", text.replace("\r\n", "\n").replace('\n', "\r\n\r\n"));
+        assert!(check_table(name, &blank, text).is_ok());
+        let renamed = text.replacen("part_number", "part_no", 1);
+        assert!(check_table(name, &renamed, text).is_err());
+    }
 
     #[test]
     fn the_s120_drives_include_the_double_motor_modules_with_their_per_axis_currents() {

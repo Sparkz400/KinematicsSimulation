@@ -157,6 +157,25 @@ with ThreadPoolExecutor() as pool:
 RMS torque, thermal utilisation and the verdicts per mass, and the signals of one run as a DataFrame. The test suite
 runs it from top to bottom.
 
+## Cancel a long call
+
+A `Job` counts the runs of the analyses called inside it and stops them from another thread (the MCP server does this
+when a call times out). `job.cancel()` starts no new run; `job.run` raises `kinematics_sim.Cancelled` (an `Exception`)
+once the runs under way have ended:
+
+```python
+import threading
+
+job = ks.Job()
+t = threading.Thread(target=lambda: job.run(lambda: ks.verdicts(cfg, bands=True, samples=2000)))
+t.start()
+print(job.done, "of", job.total)  # runs finished, runs planned so far (later batches add to it)
+job.cancel(); t.join()            # the thread's job.run raised ks.Cancelled
+```
+
+Every function the callable calls on that thread belongs to the job; one that raises something else keeps its error.
+A job that is cancelled before `run` ends the first batch at once. Calls without a job run to the end as before.
+
 ## Tests
 
 ```bash

@@ -239,6 +239,9 @@ pub struct CycleLoad {
     /// first pass included (`Sim::least_clearance`), m; and the run's first contact with one.
     pub clearance: Option<f64>,
     pub contact: Option<crate::Contact>,
+    /// Where the machine has two parts not joined at its start pose: the least clearance between such parts over the
+    /// whole run, as `clearance` (`Sim::own_parts`), m.
+    pub own_clearance: Option<f64>,
     /// The highest braking power of all drives at once, W: with the DC link simulated, what the braking resistors
     /// took (a shared one counted once); without, the power the drives fed back. For an S120 line-up, which brakes
     /// through one Braking Module (`verdicts`).
@@ -1169,6 +1172,7 @@ impl Tally {
                 .collect(),
             clearance: (!sim.obstacles.is_empty()).then_some(sim.least_clearance),
             contact: sim.contact.clone(),
+            own_clearance: sim.own_parts.own.as_ref().map(|own| own.clearance),
             braking_power_peak: self.braking_peak,
             warm_start: None,
             conveyor: sim.control.conveyor().map(|(c, _)| {
@@ -1291,6 +1295,8 @@ pub fn analyse_cycle(sim: &mut Sim) -> Result<CycleLoad, CommandError> {
 /// `analyse_cycle`, with the effect views (`MotorLoad::torque_parts`, `CycleLoad::budget`) only where `views` asks
 /// for them: they cost one more evaluation of the machine per step, and no verdict needs them.
 pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, CommandError> {
+    // Every sequential batch of cycles (searches, the sweeps below) goes through here: where a job is cancelled.
+    check_cancelled();
     if let Some(points) = sim.plan_configured_path() {
         return analyse_trajectory_with(sim, points?, views);
     }
@@ -1458,10 +1464,16 @@ pub struct Verdict {
     pub ok: bool,
 }
 
+/// Whether a value or a limit of these verdicts is NaN or infinite: what an unstable, diverging loop leaves behind
+/// (a result that is not a number is not a pass either). Front ends say so (`verdict-not-finite`).
+pub fn any_not_finite<'a>(verdicts: impl IntoIterator<Item = &'a Verdict>) -> bool {
+    verdicts.into_iter().any(|v| !v.value.is_finite() || !v.limit.is_finite())
+}
+
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 84] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 88] = [
     // A guide's moment ratings (Mx, My, Mz), which its equivalent load takes where a machine gives the moments.
     "ratings.guide_moment_x_nm",
     "ratings.guide_moment_y_nm",
@@ -1512,6 +1524,8 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 84] = [
     // How fast a robot program turns the tool (`program::read_with`).
     "program",
     "program.orientation_speed_rad_s",
+    // The factor on a program's programmed feeds, 1 without it (`control::Controller::feed_override`).
+    "profile.feed_override",
     "ratings.settling_tolerance_rad",
     "ratings.pulley_max_torque_nm",
     "ratings.motor_bearing_load_rating_n",
@@ -1558,6 +1572,10 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 84] = [
     "ratings.max_repeatability_m",
     "ratings.max_positioning_error_rad",
     "ratings.max_repeatability_rad",
+    // The installation conditions of a catalogue drive, which derate its currents (`catalog::drive_derating`).
+    "ratings.drive_ambient_c",
+    "ratings.drive_altitude_m",
+    "ratings.drive_pulse_frequency_hz",
 ];
 
 fn at_most(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -> Verdict {
@@ -1570,7 +1588,7 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
 
 /// The checks whose value has to stay at or above its limit ("belt-least-tension": above); every other check's value has to
 /// stay at or below it.
-pub const AT_LEAST: [&str; 10] = [
+pub const AT_LEAST: [&str; 11] = [
     "belt-least-tension",
     "pulley-bearing-life",
     "gearbox-life",
@@ -1581,6 +1599,7 @@ pub const AT_LEAST: [&str; 10] = [
     "screw-life",
     "strain-wave-life",
     "collision",
+    "self-collision",
 ];
 
 /// Above 1 it fails (but "belt-least-tension" at exactly 1). A check of `AT_LEAST` at or below zero (a contact, "collision" at no
@@ -1632,7 +1651,9 @@ pub fn utilisation(v: &Verdict) -> f64 {
 ///
 /// "collision" judges, where the config has obstacles, the least clearance of the run to them (`CycleLoad::clearance`)
 /// against `profile.min_clearance_m`: it passes at or above it, never at a contact. Without obstacles it is not judged,
-/// as a rating left out is not, so it cannot fail there.
+/// as a rating left out is not, so it cannot fail there. "self-collision" judges the least clearance between the
+/// machine's own parts that are not joined at its start pose (`CycleLoad::own_clearance`) against the same limit, as
+/// "collision" does; where the machine has no such two parts it is not judged.
 pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigError> {
     let cfg = &crate::catalog::parts_applied(cfg)?;
     // A rating that is no number (NaN) would otherwise count as left out, and not be judged.
@@ -1856,6 +1877,16 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         let limit = cfg.non_negative("profile.min_clearance_m")?;
         out.push(Verdict {
             check: "collision",
+            motor: None,
+            value: clearance,
+            limit,
+            ok: clearance >= limit && clearance > 0.0,
+        });
+    }
+    if let Some(clearance) = load.own_clearance {
+        let limit = cfg.non_negative("profile.min_clearance_m")?;
+        out.push(Verdict {
+            check: "self-collision",
             motor: None,
             value: clearance,
             limit,
@@ -2509,17 +2540,91 @@ fn threads() -> usize {
     }
 }
 
-/// `work(0..count)` on all processors, in the order of the index: for runs that do not depend on each other.
+thread_local! {
+    /// The job this thread works for (`with_progress`); `on_all_cores` hands it on to its worker threads.
+    static JOB: std::cell::RefCell<Option<std::sync::Arc<Progress>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The payload of the unwind that ends a cancelled job: it is raised with `resume_unwind`, so no panic message is
+/// printed, and `with_progress` turns it back into `Err(Cancelled)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cancelled;
+
+/// Puts a job in as this thread's current one and puts the previous one back when dropped, also when unwinding.
+struct JobGuard(Option<std::sync::Arc<Progress>>);
+
+impl JobGuard {
+    fn install(job: Option<std::sync::Arc<Progress>>) -> Self {
+        JobGuard(JOB.with(|slot| slot.replace(job)))
+    }
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        JOB.with(|slot| *slot.borrow_mut() = self.0.take());
+    }
+}
+
+fn current_job() -> Option<std::sync::Arc<Progress>> {
+    JOB.with(|slot| slot.borrow().clone())
+}
+
+/// Runs `job` as the job `progress` describes: every batch of runs it starts (`on_all_cores`) is counted in `progress`
+/// and stops once `progress.cancel` is set, which ends `job` with `Err(Cancelled)`. A panic of `job` stays a panic.
+pub fn with_progress<T>(progress: &std::sync::Arc<Progress>, job: impl FnOnce() -> T) -> Result<T, Cancelled> {
+    let _guard = JobGuard::install(Some(progress.clone()));
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
+        Ok(value) => Ok(value),
+        Err(payload) if payload.is::<Cancelled>() => Err(Cancelled),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+/// Ends the current job at once (an unwind to `with_progress`) where it was cancelled; does nothing outside a job. For
+/// the long loops that do not go through `on_all_cores`.
+pub fn check_cancelled() {
+    if current_job().is_some_and(|job| job.cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+        std::panic::resume_unwind(Box::new(Cancelled));
+    }
+}
+
+/// Adds `count` planned steps to the current job's total (none outside a job), for sequential work.
+pub(crate) fn plan_steps(count: usize) {
+    if let Some(job) = current_job() {
+        job.total.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Counts one step of sequential work as done in the current job (none outside a job).
+pub(crate) fn step_done() {
+    if let Some(job) = current_job() {
+        job.done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// `work(0..count)` on all processors, in the order of the index: for runs that do not depend on each other. Inside a
+/// job (`with_progress`) the runs are counted, no new run starts once the job is cancelled, and the call then ends the
+/// job with the `Cancelled` unwind.
 pub(crate) fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let job = current_job();
+    plan_steps(count);
+    let cancelled = || job.as_ref().is_some_and(|job| job.cancel.load(Relaxed));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let worker = || -> Vec<(usize, T)> {
+        // A nested `on_all_cores` in a run sees the job from this worker thread, too.
+        let _guard = JobGuard::install(job.clone());
         let mut done = Vec::new();
         loop {
-            let run = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if cancelled() {
+                return done;
+            }
+            let run = next.fetch_add(1, Relaxed);
             if run >= count {
                 return done;
             }
             done.push((run, work(run)));
+            step_done();
         }
     };
     let threads = threads().min(count.max(1));
@@ -2529,9 +2634,22 @@ pub(crate) fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sy
     } else {
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..threads).map(|_| scope.spawn(worker)).collect();
-            workers.into_iter().flat_map(|worker| worker.join().expect("a run of the cycle panicked")).collect()
+            // All joined before one is passed on: a worker left to the scope would replace the payload.
+            let joined: Vec<_> = workers.into_iter().map(|worker| worker.join()).collect();
+            let mut runs = Vec::new();
+            for result in joined {
+                match result {
+                    Ok(done) => runs.extend(done),
+                    Err(payload) if payload.is::<Cancelled>() => std::panic::resume_unwind(payload),
+                    Err(_) => panic!("a run of the cycle panicked"),
+                }
+            }
+            runs
         })
     };
+    if cancelled() {
+        std::panic::resume_unwind(Box::new(Cancelled));
+    }
     runs.sort_by_key(|(run, _)| *run);
     runs.into_iter().map(|(_, run)| run).collect()
 }
@@ -3564,7 +3682,7 @@ pub fn optimise_cycle_with(
     let before = match judged(&start) {
         Some((load, failed)) if failed.is_empty() => load,
         Some((_, failed)) => {
-            return Err(ConfigError::Invalid(format!("the cycle as configured fails {}", failed.join(", "))));
+            return Err(ConfigError::Part("error-cycle-fails-already", failed.join(", ")));
         }
         // Said by what stops it: the config (its own error), or the cycle that does not run (its key).
         None => {
@@ -4178,6 +4296,7 @@ pub struct StepResponse {
 
 /// Tool position of one axis, after letting the machine come to rest at its start pose.
 fn settled(entry: &MachineEntry, cfg: &Config, axis: usize) -> Result<(Sim, f64), ConfigError> {
+    check_cancelled();
     let mut sim = Sim::new(entry, cfg)?;
     if axis >= sim.machine.axes().len() {
         return Err(ConfigError::Invalid("axis".into()));
@@ -4584,8 +4703,13 @@ pub fn velocity_loop_responses(
     let starts = on_all_cores(configs.len(), |run| settled(entry, &lossless[run], 0).map(|(sim, _)| sim.snapshot()))
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
+    // Run inside a job whose progress this is, `on_all_cores` counts the points already: not twice. (Its cancel
+    // unwind then ends the call as `Cancelled` instead of the `CANCELLED` error.)
+    let counted = current_job().is_some_and(|job| std::ptr::eq(&*job, progress));
     let measure = |jobs: &[(usize, usize, f64)]| -> Result<Vec<LoopPoint>, ConfigError> {
-        progress.total.fetch_add(jobs.len(), Relaxed);
+        if !counted {
+            progress.total.fetch_add(jobs.len(), Relaxed);
+        }
         on_all_cores(jobs.len(), |j| {
             if progress.cancel.load(Relaxed) {
                 return Err(ConfigError::Invalid(CANCELLED.into()));
@@ -4595,7 +4719,9 @@ pub fn velocity_loop_responses(
             let mut sim = Sim::new(entry, &lossless[run])?;
             sim.restore(&starts[run])?;
             let point = loop_point(sim, motor, frequency, amplitudes[motor]);
-            progress.done.fetch_add(1, Relaxed);
+            if !counted {
+                progress.done.fetch_add(1, Relaxed);
+            }
             point
         })
         .into_iter()
@@ -5017,6 +5143,140 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+    fn job() -> std::sync::Arc<Progress> {
+        std::sync::Arc::new(Progress::default())
+    }
+
+    /// A job's batch is counted: N planned, N done, the results as without a job.
+    #[test]
+    fn a_job_counts_its_runs() {
+        let progress = job();
+        let out = with_progress(&progress, || on_all_cores(40, |i| i * 2));
+        assert_eq!(out, Ok((0..40).map(|i| i * 2).collect::<Vec<_>>()));
+        assert_eq!((progress.total.load(Relaxed), progress.done.load(Relaxed)), (40, 40));
+    }
+
+    /// Without a job nothing is counted or cancelled, and the job context is gone after `with_progress`.
+    #[test]
+    fn without_a_job_runs_are_as_before() {
+        assert_eq!(on_all_cores(10, |i| i + 1), (1..=10).collect::<Vec<_>>());
+        check_cancelled();
+        let progress = job();
+        with_progress(&progress, || ()).unwrap();
+        assert!(current_job().is_none());
+        assert_eq!(on_all_cores(3, |i| i), vec![0, 1, 2]);
+        assert_eq!(progress.total.load(Relaxed), 0);
+    }
+
+    /// The run number 5 cancels: the job ends with `Cancelled`, and far fewer than all 1000 runs were started (each
+    /// worker takes at most one more run after the flag is set, so not more than 6 plus the thread count).
+    #[test]
+    fn a_cancelled_job_stops_taking_runs() {
+        let progress = job();
+        let started = AtomicUsize::new(0);
+        let out = with_progress(&progress, || {
+            on_all_cores(1000, |i| {
+                started.fetch_add(1, Relaxed);
+                if i == 5 {
+                    progress.cancel.store(true, Relaxed);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            })
+        });
+        assert_eq!(out, Err(Cancelled));
+        let started = started.load(Relaxed);
+        assert!(started < 6 + threads() + 2, "{started} runs started");
+        assert!(progress.done.load(Relaxed) <= started && progress.done.load(Relaxed) < 1000);
+    }
+
+    /// A nested batch inside a run belongs to the job: its cancel ends the outer batch with `Cancelled`, too.
+    #[test]
+    fn a_nested_batch_is_cancelled_too() {
+        let progress = job();
+        let started = AtomicUsize::new(0);
+        let out = with_progress(&progress, || {
+            on_all_cores(4, |_| {
+                on_all_cores(500, |i| {
+                    started.fetch_add(1, Relaxed);
+                    if i == 3 {
+                        progress.cancel.store(true, Relaxed);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                })
+            })
+        });
+        assert_eq!(out, Err(Cancelled));
+        assert!(started.load(Relaxed) < 4 * 500);
+    }
+
+    /// A job cancelled before it starts runs nothing.
+    #[test]
+    fn a_job_cancelled_before_its_start_runs_nothing() {
+        let progress = job();
+        progress.cancel.store(true, Relaxed);
+        let started = AtomicUsize::new(0);
+        let out = with_progress(&progress, || {
+            on_all_cores(50, |_| {
+                started.fetch_add(1, Relaxed);
+            })
+        });
+        assert_eq!((out, started.load(Relaxed)), (Err(Cancelled), 0));
+    }
+
+    /// A real panic in the job stays a panic (not `Cancelled`), whether it is in a run or in the job itself, and the
+    /// job context is restored.
+    #[test]
+    fn a_real_panic_stays_a_panic() {
+        let progress = job();
+        let in_job = std::panic::catch_unwind(|| with_progress(&progress, || -> u8 { panic!("model failed") }));
+        assert!(in_job.is_err_and(|p| !p.is::<Cancelled>()));
+        let in_run = std::panic::catch_unwind(|| {
+            with_progress(&progress, || {
+                on_all_cores(8, |i| {
+                    if i == 2 {
+                        panic!("run failed")
+                    }
+                })
+            })
+        });
+        assert!(in_run.is_err_and(|p| !p.is::<Cancelled>()));
+        assert!(current_job().is_none());
+    }
+
+    /// `check_cancelled` raises inside a cancelled job and is silent in a job that is not, and outside any.
+    #[test]
+    fn check_cancelled_raises_only_in_a_cancelled_job() {
+        check_cancelled();
+        let progress = job();
+        assert_eq!(with_progress(&progress, check_cancelled), Ok(()));
+        progress.cancel.store(true, Relaxed);
+        assert_eq!(with_progress(&progress, check_cancelled), Err(Cancelled));
+        check_cancelled();
+    }
+
+    /// Sequential work plans and counts its steps in the job.
+    #[test]
+    fn sequential_steps_are_counted_in_the_job() {
+        let progress = job();
+        with_progress(&progress, || {
+            plan_steps(3);
+            (0..3).for_each(|_| step_done());
+        })
+        .unwrap();
+        assert_eq!((progress.total.load(Relaxed), progress.done.load(Relaxed)), (3, 3));
+    }
+
+    /// A value or limit of NaN or infinity is named, whether the row passes or not; finite ones are not.
+    #[test]
+    fn a_verdict_that_is_not_finite_is_found() {
+        let row = |value: f64, limit: f64| Verdict { check: "motor-thermal", motor: None, value, limit, ok: false };
+        assert!(!any_not_finite(&[row(435.1, 1.0), row(0.0, 2.0)]));
+        assert!(any_not_finite(&[row(1.0, 2.0), row(f64::INFINITY, 2.0)]));
+        assert!(any_not_finite(&[row(f64::NAN, 2.0)]));
+        assert!(any_not_finite(&[row(1.0, f64::NAN)]));
+    }
 
     /// By hand: a winding that settles at 102 K on every odd pass and 92 K on every even one (a pick alternating between
     /// two places) repeats every 2 passes; one at 100, 90, 80, 100, 90, 80 every 3; one that closes in on 95 K by halves
@@ -5229,6 +5489,7 @@ line_module_efficiency = 0.9
             checks: Vec::new(),
             clearance: None,
             contact: None,
+            own_clearance: None,
             braking_power_peak: 0.0,
             warm_start: None,
             conveyor: None,

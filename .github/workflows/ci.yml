@@ -1,11 +1,14 @@
 name: CI
 
 # A push to a branch other than main runs nothing: its pull request does (otherwise each push of a pull request's
-# branch ran the workflow twice).
+# branch ran the workflow twice). The long sweeps run weekly and by hand, not on a push (see the job "sweeps").
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 1 * * 0"
+  workflow_dispatch:
 
 # A newer push to a pull request stops the run of the older one; runs on main all finish.
 concurrency:
@@ -15,11 +18,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # A pull request runs the fast tests (profile ci: the default filter of .config/nextest.toml leaves out the tests that
-  # take over 20 s each); a push to main runs every test (profile ci-full) and then the long sweeps.
-  TEST_PROFILE: ${{ github.event_name == 'push' && 'ci-full' || 'ci' }}
+  # take over 20 s each); a push to main, the weekly run and a run by hand run every test (profile ci-full).
+  TEST_PROFILE: ${{ github.event_name != 'pull_request' && 'ci-full' || 'ci' }}
   # The jobs "test" split the tests into this many partitions per platform; keep it equal to the length of their
   # matrix's list "partition".
-  PARTITIONS: ${{ github.event_name == 'push' && 6 || 2 }}
+  PARTITIONS: ${{ github.event_name != 'pull_request' && 6 || 2 }}
 
 # The jobs that need the test binaries wait for "build" and run even when it failed for the other platform
 # (`!cancelled()`); where their own platform's archive is missing, they fail at its download. No job skips the steps
@@ -118,7 +121,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        partition: ${{ fromJSON(github.event_name == 'push' && '[1, 2, 3, 4, 5, 6]' || '[1, 2]') }}
+        partition: ${{ fromJSON(github.event_name != 'pull_request' && '[1, 2, 3, 4, 5, 6]' || '[1, 2]') }}
     name: test (${{ matrix.os }}, ${{ matrix.partition }})
     runs-on: ${{ matrix.os }}
     # A push's partitions took up to 75 minutes on 16 November 2026 (Windows, 2 and 4), and the tests that took over
@@ -190,16 +193,16 @@ jobs:
           cargo nextest run --archive-file tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite
           --profile $TEST_PROFILE -E "package(sim-opcua) & (binary(plc) | binary(soak) | binary(interop))" --test-threads 1
 
-  # On a push to main: what every profile leaves out, the long sweeps of the velocity loops' margins across the bounds
-  # and the EXCT-30's worst corner. Each spreads its runs over every core, so one at a time on a runner, and the
-  # longest apart: 27 minutes for the D4 alone on 4 cores (14 November 2026), where it takes 7.4 minutes on the 16
-  # threads of the machine all of them were timed on (16 November 2026: the rotary hexapod 12.1 minutes, the platform
-  # on cables in space 12.5, the hexapod and the four-arm delta 10.2, the arm on its track 8.9; so some 45 minutes
-  # each on a runner, estimated, not measured). The last group takes every sweep the others do not name, so that a
-  # new one is run, not left out.
+  # Weekly and by hand (Actions, CI, "Run workflow"): what every profile leaves out, the long sweeps of the velocity
+  # loops' margins across the bounds and the EXCT-30's worst corner. Each spreads its runs over every core, so one at a
+  # time on a runner, and the longest apart. On 16 November 2026 every group but two ended within 2 hours on a push;
+  # since the margins are measured at every pose the cycle stops at (22 November) the sweeps cost several times that,
+  # and on 25 November ten of 22 groups ran past 2 hours (the platform on cables in space alone among them), so they
+  # left the push to main, which they held up for hours, and a group may take GitHub's 6 hours. The last group takes
+  # every sweep the others do not name, so that a new one is run, not left out.
   sweeps:
     needs: build
-    if: ${{ !cancelled() && github.event_name == 'push' }}
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -207,10 +210,14 @@ jobs:
         group:
           - name: delta-d4
             filter: test(/^across_the_bounds::delta_d4::/)
-          - name: urdf-arm-and-exct-30-corner
-            filter: test(/^across_the_bounds::urdf_arm::/) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
-          - name: delta-d3-and-scara
-            filter: test(/^across_the_bounds::delta_d3::/) | test(/^across_the_bounds::scara::/)
+          - name: urdf-arm
+            filter: test(/^across_the_bounds::urdf_arm::/)
+          - name: exct-30-corner
+            filter: test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
+          - name: delta-d3
+            filter: test(/^across_the_bounds::delta_d3::/)
+          - name: scara
+            filter: test(/^across_the_bounds::scara::/)
           - name: hexapod-rotary
             filter: test(/^across_the_bounds::hexapod_rotary::/)
           - name: cable-spatial
@@ -219,19 +226,23 @@ jobs:
             filter: test(/^across_the_bounds::hexapod::/)
           - name: delta-h4
             filter: test(/^across_the_bounds::delta_h4::/)
-          - name: arm-on-track-and-tripod
-            filter: test(/^across_the_bounds::arm_on_track::/) | test(/^across_the_bounds::tripod::/)
+          - name: arm-on-track
+            filter: test(/^across_the_bounds::arm_on_track::/)
+          - name: tripod
+            filter: test(/^across_the_bounds::tripod::/)
           - name: palletiser-and-parallel-scara
             filter: test(/^across_the_bounds::palletiser::/) | test(/^across_the_bounds::parallel_scara::/)
-          - name: wafer-handler-and-cable-planar
-            filter: test(/^across_the_bounds::wafer_handler::/) | test(/^across_the_bounds::cable_planar::/)
+          - name: wafer-handler
+            filter: test(/^across_the_bounds::wafer_handler::/)
+          - name: cable-planar
+            filter: test(/^across_the_bounds::cable_planar::/)
           - name: the-rest
             filter: >-
               (package(sim-machines) & binary(control) & test(/^across_the_bounds::/))
               & not test(/^across_the_bounds::(delta_d4|urdf_arm|delta_d3|scara|hexapod_rotary|cable_spatial|hexapod|delta_h4|arm_on_track|tripod|cable_planar|palletiser|parallel_scara|wafer_handler)::/)
     name: sweeps (${{ matrix.os }}, ${{ matrix.group.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Linux system libraries

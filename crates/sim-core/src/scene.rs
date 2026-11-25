@@ -128,6 +128,14 @@ pub struct Aabb {
 }
 
 impl Aabb {
+    /// The least and greatest corner.
+    pub fn extent(&self) -> ([f64; 3], [f64; 3]) {
+        (
+            std::array::from_fn(|i| self.centre[i] - self.size[i] / 2.0),
+            std::array::from_fn(|i| self.centre[i] + self.size[i] / 2.0),
+        )
+    }
+
     /// The nearest points of the two boxes, one on each, and the clearance between them: the distance of the two
     /// points; where the boxes overlap, the depth of the overlap, negative: how far one box would have to move to part
     /// from the other, along the axis where that is least (both points then lie in the middle of the overlap). A box
@@ -164,6 +172,50 @@ pub struct Capsule {
 }
 
 impl Capsule {
+    /// The clearance between two capsules (the planning check of the machine's own parts, `Machine::connected_bodies`):
+    /// the distance of the two segments (closest points as Ericson, Real-Time Collision Detection 5.1.9) less both
+    /// radii. Negative in an overlap, then up to the radii's sum where the segments cross (a measure of how deep, not
+    /// the exact depth).
+    pub fn gap_capsule(&self, other: &Capsule) -> f64 {
+        let sub = |a: [f64; 3], b: [f64; 3]| -> [f64; 3] { std::array::from_fn(|i| a[i] - b[i]) };
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let (d1, d2, r) = (sub(self.to, self.from), sub(other.to, other.from), sub(self.from, other.from));
+        let (a, e, f) = (dot(d1, d1), dot(d2, d2), dot(d2, r));
+        const TINY: f64 = 1e-18;
+        let (s, t) = if a <= TINY && e <= TINY {
+            (0.0, 0.0)
+        } else if a <= TINY {
+            (0.0, (f / e).clamp(0.0, 1.0))
+        } else {
+            let c = dot(d1, r);
+            if e <= TINY {
+                ((-c / a).clamp(0.0, 1.0), 0.0)
+            } else {
+                let b = dot(d1, d2);
+                let denom = a * e - b * b;
+                let s = if denom > TINY { ((b * f - c * e) / denom).clamp(0.0, 1.0) } else { 0.0 };
+                let t = (b * s + f) / e;
+                if t < 0.0 {
+                    ((-c / a).clamp(0.0, 1.0), 0.0)
+                } else if t > 1.0 {
+                    (((b - c) / a).clamp(0.0, 1.0), 1.0)
+                } else {
+                    (s, t)
+                }
+            }
+        };
+        let apart: [f64; 3] = std::array::from_fn(|i| (self.from[i] + s * d1[i]) - (other.from[i] + t * d2[i]));
+        dot(apart, apart).sqrt() - self.radius - other.radius
+    }
+
+    /// The least and greatest corner of the box along the scene's axes around the capsule.
+    pub fn extent(&self) -> ([f64; 3], [f64; 3]) {
+        (
+            std::array::from_fn(|i| self.from[i].min(self.to[i]) - self.radius),
+            std::array::from_fn(|i| self.from[i].max(self.to[i]) + self.radius),
+        )
+    }
+
     /// The nearest points of the capsule and the box, one on each, and the clearance between them, as `Aabb::gap` has
     /// them: the least signed distance of the segment's points to the box, less the radius. Negative in an overlap,
     /// where it is the depth to the box face nearest to the segment's deepest point (both points then on the

@@ -64,7 +64,8 @@ impl PyConfig {
         let mut cfg =
             sim_components::catalog::resolve(self.entry, &self.base).map_err(|e| config_error(self.entry, e))?;
         for (path, value) in &self.sets {
-            cfg.set(path, value.clone()).map_err(|e| config_error(self.entry, e))?;
+            sim_components::set_config(self.entry, &mut cfg, path, value.clone())
+                .map_err(|e| config_error(self.entry, e))?;
         }
         let schema = sim_components::schema(self.entry, &cfg).map_err(|e| config_error(self.entry, e))?;
         cfg.check_keys(&schema, &sim_components::analysis::RATINGS_BEYOND_DEFAULT)
@@ -76,8 +77,10 @@ impl PyConfig {
     /// One value set: a part into `base`, anything else onto the list. Nothing changes if the result is refused.
     fn assign(&mut self, path: &str, value: toml::Value) -> PyResult<()> {
         let mut next = self.clone();
-        if path.starts_with("parts.") {
-            next.base.set(path, value).map_err(|e| config_error(self.entry, e))?;
+        // A drive's installation conditions are read where its part is put in: into `base` with the parts.
+        if path.starts_with("parts.") || sim_components::catalog::DRIVE_CONDITION_KEYS.contains(&path) {
+            sim_components::set_config(self.entry, &mut next.base, path, value)
+                .map_err(|e| config_error(self.entry, e))?;
         } else {
             next.sets.push((path.to_string(), value));
         }
@@ -640,7 +643,10 @@ fn sizing(
         return Err(PyValueError::new_err(format!("no supply of the catalogue: {supply:?}, vendor {vendor:?}")));
     }
     let drives: Drives = drives.parse().map_err(|_| PyValueError::new_err(format!("drives: {drives}")))?;
-    let by = parse_ranking(rank_by).ok_or_else(|| PyValueError::new_err(format!("rank_by: {rank_by}")))?;
+    // No price list here: `price` would rank every candidate as unpriced, in the weight order without a word.
+    let by = parse_ranking(rank_by)
+        .filter(|by| by.iter().all(|(c, _)| *c != sim_components::search::Criterion::Price))
+        .ok_or_else(|| PyValueError::new_err(format!("rank_by: {rank_by}")))?;
     let mix: Vec<(sim_core::Config, f64)> =
         duties.unwrap_or_default().iter().map(|(c, w)| Ok((instead(c.cfg.clone())?, *w))).collect::<PyResult<_>>()?;
     if mix.iter().any(|(_, w)| !(*w > 0.0 && w.is_finite())) {
@@ -1853,8 +1859,87 @@ impl PySim {
     }
 }
 
+pyo3::create_exception!(
+    kinematics_sim,
+    Cancelled,
+    pyo3::exceptions::PyException,
+    "A `Job` was cancelled (`Job.cancel()`) while its callable ran."
+);
+
+/// A long analysis to watch and to stop from another thread: `run(callable)` calls `callable` on this thread, and every
+/// analysis it calls is counted in `done` / `total` and ends soon after `cancel()` with `Cancelled`. The analyses
+/// release the GIL but run their batches on worker threads that belong to the job; none hands its work to a thread
+/// the job does not follow.
+#[pyclass(name = "Job", module = "kinematics_sim")]
+struct PyJob {
+    progress: std::sync::Arc<sim_components::analysis::Progress>,
+}
+
+#[pymethods]
+impl PyJob {
+    #[new]
+    fn new() -> Self {
+        PyJob { progress: Default::default() }
+    }
+
+    /// Stops the job: no further run starts, and `run` raises `Cancelled` once the runs under way have ended. From
+    /// any thread; cancelling a job that has ended or never ran does nothing until it is run (then it stops at once).
+    fn cancel(&self) {
+        self.progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Runs finished so far.
+    #[getter]
+    fn done(&self) -> usize {
+        self.progress.done.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Runs planned so far; later batches (refinement rounds, the next call of the callable) add to it.
+    #[getter]
+    fn total(&self) -> usize {
+        self.progress.total.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[getter]
+    fn cancelled(&self) -> bool {
+        self.progress.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The result of `callable()`, which belongs to this job while it runs; `Cancelled` where the job was cancelled.
+    fn run(&self, py: Python<'_>, callable: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        // PyO3 turns an unwind that reaches a `#[pyfunction]` into a `PanicException` and drops its payload, so the
+        // `Cancelled` unwind of the core arrives here as one: with the cancel flag set, that is what it is. (A real
+        // panic at the same moment is reported as cancelled, too: the job was being stopped anyway.) Called through the
+        // C API: PyO3's own fetch of a `PanicException` prints it with a traceback and resumes the unwind, which for
+        // a cancel is noise; here it is cleared unprinted. Any other error is fetched as PyO3 does.
+        let call = || {
+            // SAFETY: the GIL is held (`py`) and `callable` is a live object; a non-null result is a new reference.
+            let result = unsafe { pyo3::ffi::PyObject_CallNoArgs(callable.as_ptr()) };
+            if !result.is_null() {
+                return Ok(unsafe { Bound::from_owned_ptr(py, result) });
+            }
+            let panic = py.get_type::<pyo3::panic::PanicException>();
+            // SAFETY: as above; an exception is set, as the call returned null.
+            if self.cancelled() && unsafe { pyo3::ffi::PyErr_ExceptionMatches(panic.as_ptr()) } != 0 {
+                unsafe { pyo3::ffi::PyErr_Clear() };
+                return Err(Cancelled::new_err("cancelled"));
+            }
+            Err(PyErr::fetch(py))
+        };
+        match sim_components::analysis::with_progress(&self.progress, call) {
+            Err(sim_components::analysis::Cancelled) => Err(Cancelled::new_err("cancelled")),
+            Ok(Err(e)) if self.cancelled() && e.is_instance_of::<pyo3::panic::PanicException>(py) => {
+                Err(Cancelled::new_err("cancelled"))
+            }
+            Ok(result) => result.map(Bound::unbind),
+        }
+    }
+}
+
 #[pymodule]
 fn kinematics_sim(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyJob>()?;
+    m.add("Cancelled", m.py().get_type::<Cancelled>())?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PySim>()?;
     m.add_function(wrap_pyfunction!(machines, m)?)?;

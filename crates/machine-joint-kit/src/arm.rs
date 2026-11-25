@@ -1827,6 +1827,11 @@ impl Mechanism for Arm {
         &["flange", "payload"]
     }
 
+    /// The bars `scene` draws from the base to the flange.
+    fn collision_links(&self) -> &'static [&'static str] {
+        &["link"]
+    }
+
     /// Each body as a bar from its joint to the next, each motor joint's motor with its shaft bar and speed at the first
     /// URDF joint it turns; the flange and the payload as boxes (the payload where it swings to, on a line from the
     /// flange), for the collision with obstacles.

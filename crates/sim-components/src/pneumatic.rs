@@ -811,6 +811,12 @@ impl Machine for Pneumatic {
     fn collision_capsules(&self, state: &[f64]) -> Vec<sim_core::Capsule> {
         self.inner.collision_capsules(&state[..self.n()])
     }
+    fn self_collision_capsules(&self, state: &[f64]) -> Vec<sim_core::Capsule> {
+        self.inner.self_collision_capsules(&state[..self.n()])
+    }
+    fn connected_bodies(&self, state: &[f64], boxes: usize, capsules: usize) -> Option<Vec<(usize, usize)>> {
+        self.inner.connected_bodies(&state[..self.n()], boxes, capsules)
+    }
     fn rating_checks(&self) -> Vec<RatingCheck> {
         let mut checks = self.inner.rating_checks();
         for c in &self.cylinders {

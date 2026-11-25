@@ -244,6 +244,61 @@
       },
       "description": "DC link data measured on one real drive: not catalogue data. The metadata's notes give the method."
     },
+    "derating": {
+      "type": "object",
+      "required": [
+        "quantity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "altitude_m": {
+          "type": "number",
+          "unit": "m",
+          "description": "Installation altitude above sea level."
+        },
+        "ambient_c": {
+          "type": "number",
+          "unit": "degC",
+          "description": "Ambient temperature of the drive (the air around it)."
+        },
+        "basis": {
+          "type": "string",
+          "description": "How the row follows from the document: table, inferred, rule, curve, text or fixed."
+        },
+        "output_current_factor": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "unit": "1",
+          "description": "Share of the rated output current the drive gives at the row's condition."
+        },
+        "part_number": {
+          "type": "string",
+          "description": "The drive the row is for; empty: every drive of the table's family that has no rows of its own."
+        },
+        "pulse_frequency_hz": {
+          "type": "number",
+          "minimum": 0,
+          "unit": "Hz"
+        },
+        "quantity": {
+          "type": "string",
+          "enum": [
+            "altitude",
+            "ambient",
+            "altitude_ambient",
+            "pulse_frequency",
+            "ambient_limit"
+          ],
+          "description": "What the row derates by; ambient_limit: the highest ambient temperature allowed at the row's pulse frequency."
+        },
+        "source": {
+          "type": "string",
+          "description": "The id of the row's source in the table's metadata; without it, the metadata's default_source."
+        }
+      },
+      "description": "Derating of a drive's output current by installation altitude, ambient temperature and pulse frequency."
+    },
     "line_module": {
       "type": "object",
       "required": [
@@ -325,6 +380,65 @@
         }
       },
       "description": "An infeed module: line side and DC link ratings, braking where the module has a chopper."
+    },
+    "parameters": {
+      "type": "object",
+      "required": [
+        "config_key",
+        "parameter",
+        "name",
+        "unit",
+        "factor",
+        "basis",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "printed",
+            "derived"
+          ],
+          "description": "printed: the quantity and unit as the manual prints them; derived: a relation worked out from what it prints."
+        },
+        "config_key": {
+          "type": "string",
+          "description": "The simulator's [drive] key (without the table name) whose value the parameter takes."
+        },
+        "factor": {
+          "type": "number",
+          "unit": "1",
+          "description": "The parameter's value per unit of the config key, in the unit column."
+        },
+        "name": {
+          "type": "string",
+          "description": "The parameter's name as the manual prints it."
+        },
+        "note": {
+          "type": "string"
+        },
+        "parameter": {
+          "type": "string",
+          "pattern": "^p[0-9]+$"
+        },
+        "rule": {
+          "enum": [
+            "notch_damping",
+            "zero",
+            "constant",
+            "ramp_time"
+          ],
+          "description": "A conversion a factor does not say; empty: value times factor."
+        },
+        "source": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "description": "The parameter's unit as the manual prints it."
+        }
+      },
+      "description": "Which parameter of a drive family takes the value of a simulator config key, with the conversion from the config's unit."
     }
   }
 }

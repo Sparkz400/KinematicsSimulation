@@ -81,6 +81,7 @@ pub fn study(entry: &MachineEntry, cfg: &Config, category: StopCategory, grid: u
     while sim.time() < LONGEST_PASS_S && if path { sim.control.busy() } else { sim.control.cycle_passes() < 2 } {
         sim.step();
         if sim.step % every == 0 {
+            crate::analysis::check_cancelled();
             sim.machine.tool_state(&sim.state, &mut pose, &mut rate);
             for (best, v) in fastest.iter_mut().zip(&rate) {
                 if v.abs() > best.0 {
@@ -102,14 +103,26 @@ pub fn study(entry: &MachineEntry, cfg: &Config, category: StopCategory, grid: u
     // The run again, kept at each moment.
     let mut sim = started()?;
     let mut kept: Vec<Snapshot> = Vec::new();
+    // Each moment: kept on the run again, then stopped from.
+    crate::analysis::plan_steps(2 * moments.len());
     for (step, _) in &moments {
         while sim.step < *step {
             sim.step();
         }
+        crate::analysis::check_cancelled();
         kept.push(sim.snapshot());
+        crate::analysis::step_done();
     }
-    let stops: Vec<Stop> =
-        moments.iter().zip(&kept).map(|((_, moment), at)| stop(&mut sim, at, *moment, category)).collect();
+    let stops: Vec<Stop> = moments
+        .iter()
+        .zip(&kept)
+        .map(|((_, moment), at)| {
+            crate::analysis::check_cancelled();
+            let stopped = stop(&mut sim, at, *moment, category);
+            crate::analysis::step_done();
+            stopped
+        })
+        .collect();
     let worst =
         (0..stops.len()).max_by(|&a, &b| stops[a].tool_distance.total_cmp(&stops[b].tool_distance)).unwrap_or(0);
     let mut verdicts = Vec::new();

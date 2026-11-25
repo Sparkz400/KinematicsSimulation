@@ -28,9 +28,16 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 import kinematics_sim as ks
 
-# A call that runs longer is given up (its thread runs to its end in the background; the simulator cannot be stopped).
+# A call that runs longer is given up and its job cancelled: no new run starts, the thread ends once the runs under way do.
 TIMEOUT_S = float(os.environ.get("KINEMATICS_SIM_MCP_TIMEOUT_S", "900"))
+HEARTBEAT_S = 5.0  # between progress notices
 MAX_ROWS = 25
+# Bounds that keep one call (or a client's retries) from using the machine for hours, and the sessions, which live in
+# this process, from growing without end. The counts multiply the runs of a tool; all are far above the defaults.
+MAX_SESSIONS = 32  # a 33rd drops the least recently used (there is no tool to delete one)
+MAX_RUNS = 200  # optimise_cycle `runs` (default 40)
+MAX_POINTS = 20  # positioning_accuracy `points` (default 5)
+MAX_REPEATS = 20  # positioning_accuracy `repeats` (default 5)
 
 ESTIMATES = (
     "Only one machine (a ball screw bench) was measured; friction, damping, stiffness and similar values of the other "
@@ -97,9 +104,25 @@ def _machine_ids() -> list[str]:
     return [m["id"] for m in ks.machines()]
 
 
+def _at_most(name: str, value: int, limit: int) -> None:
+    if value > limit:
+        raise ToolError(f"{name} is {value}, more than the limit of {limit} this server allows; give {limit} or fewer")
+
+
+def _store(name: str, cfg: ks.Config) -> str | None:
+    """Keeps `cfg` as session `name`, the most recently used; the session dropped to stay within MAX_SESSIONS, or None."""
+    _sessions.pop(name, None)
+    dropped = next(iter(_sessions)) if len(_sessions) >= MAX_SESSIONS else None
+    if dropped is not None:
+        del _sessions[dropped]
+    _sessions[name] = cfg
+    return dropped
+
+
 def _config(session: str) -> ks.Config:
     """A session's config, or a machine id's default config (not stored)."""
     if session in _sessions:
+        _sessions[session] = _sessions.pop(session)  # now the most recently used
         return _sessions[session]
     if session in _machine_ids():
         return ks.Config(session)
@@ -137,33 +160,52 @@ def _param_label(cfg: ks.Config, key: str) -> str | None:
 
 
 async def _call(ctx: Context | None, what: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
-    """`fn` in a worker thread (the simulator releases the GIL), with progress every 5 s and the timeout."""
+    """`fn` in a worker thread (the simulator releases the GIL) as a `ks.Job`, with progress every 5 s and the timeout;
+    where the call is given up or cancelled by the client, the job is cancelled and the thread ends soon."""
     result: Any = None
     error: BaseException | None = None
+    job = ks.Job()
 
     async def heartbeat() -> None:
-        elapsed = 0
+        # MCP progress must increase with every notice, and the job's runs may stand still or grow a new batch: the
+        # progress is the time used of the timeout, the runs (done of planned so far) are in the message.
+        elapsed = 0.0
         while True:
-            await anyio.sleep(5)
-            elapsed += 5
+            await anyio.sleep(HEARTBEAT_S)
+            elapsed += HEARTBEAT_S
             if ctx is not None:
-                await ctx.report_progress(elapsed, TIMEOUT_S, f"{what}: running for {elapsed} s")
+                runs = f", {job.done} of {job.total} runs" if job.total else ""
+                await ctx.report_progress(elapsed, TIMEOUT_S, f"{what}: running for {elapsed:.0f} s{runs}")
 
     try:
         with anyio.fail_after(TIMEOUT_S):
             async with anyio.create_task_group() as tg:
                 tg.start_soon(heartbeat)
                 try:
-                    result = await anyio.to_thread.run_sync(partial(fn, *args, **kwargs), abandon_on_cancel=True)
+                    result = await anyio.to_thread.run_sync(
+                        partial(job.run, partial(fn, *args, **kwargs)), abandon_on_cancel=True
+                    )
                 except Exception as e:  # kept out of the task group, which would wrap it
                     error = e
+                except BaseException as e:
+                    # A panic of the core arrives as pyo3_runtime.PanicException, a BaseException that is not
+                    # importable by name. The server and its sessions stay.
+                    if type(e).__name__ != "PanicException":
+                        raise
+                    error = ToolError(
+                        f"{what}: the model failed internally (a bug in the simulator, not in the input); the "
+                        "sessions are kept. Report it with the config (get_config as_toml)."
+                    )
                 finally:
+                    job.cancel()  # a no-op once the call has returned
                     tg.cancel_scope.cancel()
     except TimeoutError:
         raise ToolError(
             f"{what} did not finish within {TIMEOUT_S:.0f} s and was given up (set KINEMATICS_SIM_MCP_TIMEOUT_S to "
             "allow longer). Narrow it: fewer runs or samples, a motor series, no bands."
         ) from None
+    if isinstance(error, ToolError):
+        raise error
     if error is not None:
         raise ToolError(f"{what}: {str(error).strip(chr(39))}") from None
     return result
@@ -195,6 +237,78 @@ def _output_file(name: str, extensions: tuple[str, ...]) -> Path:
         raise ToolError(f"{target} exists; give another name (the operator can allow overwriting with "
                         "KINEMATICS_SIM_MCP_OVERWRITE=1)")
     return target
+
+
+# Files are read only where the operator says, too. The Rust core opens a file named by a config value when a machine is
+# built: `arm.urdf_file` (the arm machine's `arm.rs` `chain`: a built-in name, else the path) and `<prefix>.table_file`
+# (sim-components/src/cam.rs `Cam::from_config`: a CSV path). Both end in `_file`, and no other config key is opened
+# (the CLI, app, FMI and OPC UA front ends read files of their own, not through a config key), so a key whose last
+# segment ends in `_file` is a file setting. A model's value for one is refused unless it is empty, the machine's own
+# default (the built-in names), or a file inside KINEMATICS_SIM_MCP_IN_DIR: else the error text would tell whether any
+# path exists, and a huge file or a device would be read without bound.
+MAX_INPUT_BYTES = 5_000_000
+FILE_REFUSED = (
+    "a file setting (a key ending in _file) may be empty, keep the machine's built-in value, or name a file of at most "
+    f"{MAX_INPUT_BYTES // 1_000_000} MB inside the folder the operator set in KINEMATICS_SIM_MCP_IN_DIR; this value was "
+    "refused"
+)
+
+
+def _file_allowed(value: str) -> bool:
+    folder = os.environ.get("KINEMATICS_SIM_MCP_IN_DIR")
+    if not folder:
+        return False
+    try:  # a relative path is the server's working directory's, as the core opens it
+        target = Path(value).resolve()  # follows links, so one pointing out of the folder is caught
+        inside = target.is_relative_to(Path(folder).resolve())
+        return inside and target.is_file() and target.stat().st_size <= MAX_INPUT_BYTES
+    except (OSError, ValueError):
+        return False
+
+
+def _check_files(files: dict[str, Any], machine: str) -> None:
+    """Refuses (one fixed message) any file setting of `files` (key: value) that is not allowed."""
+    try:
+        default = ks.Config(machine).leaves()
+    except (KeyError, ValueError):  # a machine file's machine has no registered default
+        default = {}
+    for key, value in files.items():
+        if isinstance(value, str) and value and value != default.get(key) and not _file_allowed(value):
+            raise ToolError(FILE_REFUSED)
+
+
+def _file_settings(leaves: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in leaves.items() if k.rsplit(".", 1)[-1].endswith("_file")}
+
+
+def _toml_file_settings(text: str) -> dict[str, Any]:
+    """The file settings of TOML text, found before the core would open them while it reads the text."""
+    try:
+        import tomllib
+    except ImportError:  # Python 3.10: no parser at hand, so any text that could spell a file key is refused
+        lower = text.lower()
+        if "_file" in lower or "\\u" in lower or "\\x" in lower:
+            raise ToolError(FILE_REFUSED) from None
+        return {}
+    try:
+        tree = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        # Refused here: the core's parser may read what this one does not, and would then open what it names.
+        raise ToolError(f"the TOML text could not be read: {e}") from None
+
+    def walk(node: Any, path: str) -> dict[str, Any]:
+        found: dict[str, Any] = {}
+        for k, v in (node.items() if isinstance(node, dict) else []):
+            here = f"{path}.{k}" if path else k
+            if isinstance(v, list):
+                found.update({a: b for item in v for a, b in walk(item, here).items()})
+            elif isinstance(v, dict):
+                found.update(walk(v, here))
+            elif k.endswith("_file"):
+                found[here] = v
+        return found
+
+    return walk(tree, "")
 
 
 def _fmi_binaries() -> list[str]:
@@ -281,20 +395,27 @@ def create_session(
     name: str, machine: str | None = None, toml: str | None = None, copy_of: str | None = None
 ) -> dict[str, Any]:
     """A named config kept in memory for this conversation: a machine's default (`machine`), TOML text of a config
-    for `machine`, or a copy of another session (`copy_of`). An existing session of that name is replaced."""
+    for `machine`, or a copy of another session (`copy_of`). An existing session of that name is replaced. At most
+    32 sessions are kept: one more drops the least recently used."""
     if copy_of is not None:
         cfg = _config(copy_of).copy()
     elif machine is not None:
         if machine not in _machine_ids():
             raise ToolError(f"unknown machine {machine!r}; call list_machines")
+        if toml:  # before the core reads the text, which opens the files it names
+            _check_files(_toml_file_settings(toml), machine)
         try:
             cfg = ks.Config(machine, text=toml) if toml else ks.Config(machine)
         except (ValueError, KeyError) as e:
             raise ToolError(f"the TOML was refused: {e}") from None
     else:
         raise ToolError("give `machine` (with optional `toml`) or `copy_of`")
-    _sessions[name] = cfg
-    return {"session": name, "machine": cfg.machine, "sessions": list(_sessions)}
+    dropped = _store(name, cfg)
+    out: dict[str, Any] = {"session": name, "machine": cfg.machine, "sessions": list(_sessions)}
+    if dropped:
+        out["dropped_session"] = dropped
+        out["notes"] = f"At most {MAX_SESSIONS} sessions are kept: {dropped!r}, the least recently used, is gone."
+    return out
 
 
 @mcp.tool()
@@ -350,7 +471,9 @@ def set_config_values(session: str, values: dict[str, Any]) -> dict[str, Any]:
             errors.append(_key_error(trial, k, e))
     if errors:
         raise ToolError("nothing was changed. " + "; ".join(errors))
-    _sessions[session] = trial
+    # After the values are in: a value may be a table with a file setting inside, which only the leaves show.
+    _check_files(_file_settings(trial.leaves()), trial.machine)
+    _store(session, trial)
     return {"session": session, "set": {k: _plain(trial[k]) for k in values}}
 
 
@@ -500,7 +623,8 @@ async def optimise_cycle(
     session: str, runs: int = 40, robust: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """A shorter cycle that still passes every check (higher limits, blending, shaping, lower lifts): the cycle time
-    before and after and the settings changed. `robust` keeps it passing within the error bands (slower)."""
+    before and after and the settings changed. `robust` keeps it passing within the error bands (slower). At most 200 `runs`."""
+    _at_most("runs", runs, MAX_RUNS)
     cfg = _config(session)
     r = await _call(ctx, "optimise", ks.optimise, cfg, runs=runs, worst=robust)
     out = {k: _plain(v) for k, v in r.items() if k not in ("changes", "pareto", "robust")}
@@ -515,13 +639,19 @@ async def optimise_cycle(
 
 
 @mcp.tool()
-async def loop_margins(session: str, bands: bool = False, ctx: Context | None = None) -> dict[str, Any]:
-    """Per motor the velocity loop's crossover, phase margin, gain margin and peak sensitivity, and whether they pass;
-    `bands` adds runs at the estimates' bounds."""
+async def loop_margins(
+    session: str, bands: bool = False, top: int = MAX_ROWS, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Per motor the velocity loop's crossover, phase margin, gain margin and peak sensitivity, and whether they pass,
+    at the config as it is and at each other pose the cycle stops at; `bands` adds runs at the estimates' bounds. Rows
+    that fail (`ok` false) come first, then by the smallest phase margin; a row whose phase margin is not measurable
+    (null: no gain crossover) follows the measured ones of its group. `top` rows are given, the rest counted."""
     cfg = _config(session)
     r = await _call(ctx, "margins", ks.margins, cfg, bands=bands)
+    rows = _rows(r)
+    rows.sort(key=lambda x: (x["ok"], x["phase_margin_deg"] is None, x["phase_margin_deg"] or 0.0))
     return {
-        **_capped(_rows(r), MAX_ROWS),
+        **_capped(rows, top),
         "notes": "Linearised about the operating point; the drive's filters and delays as configured. " + ESTIMATES,
     }
 
@@ -531,7 +661,10 @@ async def positioning_accuracy(
     session: str, points: int = 5, repeats: int = 5, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Static positioning accuracy and repeatability per axis (ISO 230-2: reversal, repeatability, systematic error,
-    accuracy) and at the tool (ISO 9283), with their verdicts where the config rates them."""
+    accuracy) and at the tool (ISO 9283), with their verdicts where the config rates them. At most 20 `points` and
+    20 `repeats` (the runs multiply)."""
+    _at_most("points", points, MAX_POINTS)
+    _at_most("repeats", repeats, MAX_REPEATS)
     cfg = _config(session)
     r = await _call(ctx, "accuracy", ks.accuracy, cfg, points=points, repeats=repeats)
     out = {k: _plain(v) for k, v in r.items() if not isinstance(v, (dict, np.ndarray, list))}

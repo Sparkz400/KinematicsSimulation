@@ -406,6 +406,7 @@ fn renamed(e: ConfigError, layout: &str, table: &str) -> ConfigError {
         ConfigError::Missing(d) => ConfigError::Missing(fix(d)),
         ConfigError::Type(d) => ConfigError::Type(fix(d)),
         ConfigError::Invalid(d) => ConfigError::Invalid(fix(d)),
+        ConfigError::Bounded(b, d) => ConfigError::Bounded(b, fix(d)),
         other => other,
     }
 }

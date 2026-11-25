@@ -1,0 +1,154 @@
+schema_version = 1
+class = "drive"
+table = "parameters"
+key = ["config_key", "parameter"]
+notes = '''
+Which parameter of a SINAMICS S120 servo drive object (rotary motor; the entries tagged SERVO, SERVO_AC and SERVO_I_AC of the
+List Manual, not the linear (Lin), VECTOR or HLA ones, whose units differ) takes the value of a simulator config key.
+One row per config key and parameter; a key with no parameter found in the document is not in the table.
+factor: the parameter's value per unit of the config key (the config's unit is the simulator's own: s, rad/s, N m s/rad ...),
+  with the unit column the parameter's printed unit. rule: empty = value x factor; notch_damping = factor x
+  notch_bandwidth_hz / (2 x notch_frequency_hz); zero = 0; constant = factor whatever the config has; ramp_time =
+  factor x value x p1082 / rated speed (the ramps' times run from the maximum speed there, from the rated speed here).
+basis: printed = the parameter's quantity and unit as the manual prints them, the factor only converts units; derived = a
+  relation worked out here from what the manual prints (the Kv unit, the notch damping, a sign, a reference speed).
+Text fields hold no commas (the simulator reads the table as plain CSV). The page is the printed page of the List Manual,
+which is the PDF page.
+The list is an aid for commissioning: parameter numbers and units can differ between firmware versions.
+'''
+
+[[sources]]
+id = "lh1-514"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 514 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-528"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 528 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-530"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 530 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-565"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 565 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-648"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 648 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-660"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 660 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-662"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 662 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-689"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 689 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-690"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 690 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-745"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entries on page 745 (servo entries); the note on the bandstop and its 3 dB bandwidth is on page 745"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-746"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entries on page 746 (servo entries); the note on the bandstop and its 3 dB bandwidth is on page 745"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-760"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 760 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-958"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 958 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-959"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 959 (servo entries)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-1012"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 1012 (servo entries, function module position control)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-1013"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entries on page 1013 (servo entries, function module position control); the Kv example on page 1440"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
+
+[[sources]]
+id = "lh1-1015"
+document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
+date = "2018-07"
+locator = "parameter entry on page 1015 (servo entries, function module position control)"
+method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
+url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"

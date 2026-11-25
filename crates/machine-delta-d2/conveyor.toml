@@ -346,7 +346,7 @@ friction_feedforward_torque_nm = [0.0]
 # friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints).
 friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
-# it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
+# it arrives with the motor the speed feedforward moves (S120 p2536 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
 # The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
 # sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.

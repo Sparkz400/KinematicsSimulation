@@ -11,6 +11,15 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// A command that judges exits 1 exactly where its table on standard output has a failing row (a field `FAIL`), else 0;
+/// 2 is a usage or config error. Some shipped configs fail a check on purpose (a crane without its shaper leaves the
+/// load swinging), so the code is checked against the rows, not taken as 0.
+#[track_caller]
+fn assert_judged(out: &Output) {
+    let failed = text(&out.stdout).lines().any(|l| l.split(',').any(|f| f == "FAIL"));
+    assert_eq!(out.status.code(), Some(i32::from(failed)), "{}", text(&out.stderr));
+}
+
 /// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
 /// panicked"): the tests that ran the command line on one machine after the other took half a minute alone.
 fn on_every_machine(check: impl Fn(&'static sim_core::MachineEntry) + Sync) {
@@ -85,6 +94,145 @@ fn fewest_bounds() -> &'static sim_core::MachineEntry {
         .filter(|e| (e.build)(&e.config()).unwrap().motors().len() == 1)
         .min_by_key(|e| sim_components::analysis::bounds(&e.config()).unwrap().len())
         .unwrap()
+}
+
+/// A command that judges exits 0 when every row passes, 1 when a row says FAIL (the table is printed in full either way)
+/// and 2 for a usage or config error. With a position gain of 20000 1/s the loop diverges: the rows are not finite, and
+/// the error stream says what that means and where to measure the loops; with the default config it says nothing.
+#[test]
+fn a_failing_verdict_exits_with_1_and_a_diverged_result_is_named() {
+    let entry = MACHINES[1];
+    let key = "drive.kv_1_s";
+    assert!(entry.config().get(key).is_ok(), "the list's second machine has a position gain");
+    let fine = cli(&["verdicts", entry.id]);
+    assert_eq!(fine.status.code(), Some(0), "{}", text(&fine.stderr));
+    assert!(!text(&fine.stderr).contains("not finite"), "{}", text(&fine.stderr));
+    let diverged = cli(&["verdicts", entry.id, "--set", &format!("{key}=20000")]);
+    assert_eq!(diverged.status.code(), Some(1), "{}", text(&diverged.stderr));
+    assert!(text(&diverged.stdout).contains(",FAIL"), "the table is printed in full");
+    assert!(text(&diverged.stderr).contains("not finite") && text(&diverged.stderr).contains("margins"));
+    let german = cli(&["verdicts", entry.id, "--set", &format!("{key}=20000"), "--lang", "de"]);
+    assert!(text(&german.stderr).contains("nicht endlich"), "{}", text(&german.stderr));
+    assert_eq!(cli(&["verdicts", entry.id, "--no-such-option"]).status.code(), Some(2));
+}
+
+/// A cycle that fails as configured (motors held to 0.5 m/s): the optimiser's refusal names the failing check by its
+/// label, once though every motor fails it, in the unit of a linear motor; in German too.
+#[test]
+fn the_optimisers_refusal_names_the_failing_checks_by_their_labels() {
+    let linear = MACHINES
+        .iter()
+        .find(|m| (m.build)(&m.config()).is_ok_and(|b| b.motor_linear(0)))
+        .expect("a machine of linear motors");
+    let slow = |lang| cli(&["optimise", linear.id, "--set", "drive.max_speed_rad_s=0.5", "--nominal", "--lang", lang]);
+    let english = slow("en");
+    assert_eq!(english.status.code(), Some(2));
+    assert_eq!(text(&english.stderr).trim(), "The cycle as configured already fails: Motor speed, peak [m/s]");
+    let german = text(&slow("de").stderr);
+    assert!(german.contains("[m/s]") && !german.contains("motor-speed") && !german.contains("rad/s"), "{german}");
+}
+
+/// A misspelt `--set` path names the nearest path of the config, and a value out of range is shown with its path: the
+/// message of the error stays as it was, with the help after it (the helper itself is tested in sim-core).
+#[test]
+fn config_errors_say_what_was_meant() {
+    let entry = MACHINES[1];
+    let key = payload_key(&entry.config());
+    let typo = key.replacen('a', "", 1);
+    let out = cli(&["verdicts", entry.id, "--set", &format!("{typo}=3")]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        text(&out.stderr).trim(),
+        format!("Configuration value is missing: {typo} (did you mean {key}?)"),
+        "{}",
+        text(&out.stderr)
+    );
+    let low = cli(&["verdicts", entry.id, "--set", &format!("{key}=-5.5")]);
+    assert_eq!(low.status.code(), Some(2));
+    // The payload is read by `non_negative`; a mass by `positive`; the substeps count is checked by the simulator itself
+    // (a whole number of at most 1000), which keeps the plain value: what each reader refused is said, no more.
+    assert_eq!(
+        text(&low.stderr).trim(),
+        format!("Configuration value is out of range: {key} = -5.5 (must not be negative)")
+    );
+    let (mass, substeps) = ("mass.carriage_kg", "sim.substeps");
+    assert!(entry.config().get(mass).is_ok() && entry.config().get(substeps).is_ok());
+    let light = cli(&["verdicts", entry.id, "--set", &format!("{mass}=-5.5")]);
+    assert_eq!(
+        text(&light.stderr).trim(),
+        format!("Configuration value is out of range: {mass} = -5.5 (must be above 0)")
+    );
+    // A rating the drive model reads, not the machine: its limit is said all the same.
+    let rating = "ratings.drive_max_current_a";
+    assert!(entry.config().get(rating).is_ok());
+    let unrated = cli(&["verdicts", entry.id, "--set", &format!("{rating}=-1.5")]);
+    assert_eq!(
+        text(&unrated.stderr).trim(),
+        format!("Configuration value is out of range: {rating} = -1.5 (must be above 0)")
+    );
+    let many = cli(&["verdicts", entry.id, "--set", &format!("{substeps}=5000")]);
+    assert_eq!(text(&many.stderr).trim(), format!("Configuration value is out of range: {substeps} = 5000"));
+    let german_low = cli(&["verdicts", entry.id, "--set", &format!("{mass}=-5.5"), "--lang", "de"]);
+    assert!(text(&german_low.stderr).contains("(muss größer als 0 sein)"), "{}", text(&german_low.stderr));
+    let german = cli(&["verdicts", entry.id, "--set", &format!("{typo}=3"), "--lang", "de"]);
+    assert!(text(&german.stderr).contains(&format!("(meinten Sie {key}?)")), "{}", text(&german.stderr));
+}
+
+/// `--set` adds a key the config has not got where a config file may have it (`Config::set_within`): a motor's own gain
+/// on the machine of two motors whose default gives neither a `[drive.<id>]` (measured with `margins`: that motor's
+/// crossover at the start pose moves by more than 10 %, the other's, coupled through the mechanics only, by less than
+/// 1 %; measured 22 % and 0.2 %), and a drive's installation condition, which derates the drive as it does in a file:
+/// the S210 6SL3210-5HE11-5UF0 at 3000 m and 45 degC has 90 % of its 5 A (`catalog_parts`), the limit of
+/// `drive-current`. A misspelt key of either kind is still refused, with the one it was meant for.
+#[test]
+fn set_adds_the_keys_a_config_file_may_have() {
+    let two = |e: &&sim_core::MachineEntry| {
+        let cfg = e.config();
+        let motors = (e.build)(&cfg).unwrap().motors().to_vec();
+        motors.len() == 2 && motors.iter().all(|m| cfg.get(&format!("drive.{}", m.id)).is_err())
+    };
+    let entry = MACHINES.iter().copied().find(two).unwrap();
+    let ids: Vec<String> = (entry.build)(&entry.config()).unwrap().motors().iter().map(|m| m.id.to_string()).collect();
+    let crossovers = |set: &[&str]| -> Vec<f64> {
+        let out = cli(&[&["margins", entry.id][..], set].concat());
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        // The start pose's rows come first, one per motor in order: the crossover is the third column.
+        text(&out.stdout).lines().skip(1).take(2).map(|l| l.split(',').nth(2).unwrap().parse().unwrap()).collect()
+    };
+    let shared = entry.config().f64("drive.velocity_kp_nm_s_rad").unwrap();
+    let own = format!("drive.{}.velocity_kp_nm_s_rad={:?}", ids[0], 1.35 * shared);
+    let (before, after) = (crossovers(&[]), crossovers(&["--set", &own]));
+    assert!(after[0] / before[0] > 1.1 && (after[1] / before[1] - 1.0).abs() < 0.01, "{before:?} -> {after:?}");
+
+    let one = one_belt_axis();
+    let derated = |set: &[&str]| {
+        let args = [&["verdicts", one.id, "--motor", "1FK2205-4AF", "--drive", "6SL3210-5HE11-5UF0"][..], set];
+        let out = cli(&args.concat());
+        let row = text(&out.stdout).lines().find(|l| l.starts_with("drive-current,")).map(String::from);
+        row.unwrap_or_else(|| panic!("{}", text(&out.stderr))).split(',').nth(3).unwrap().parse::<f64>().unwrap()
+    };
+    assert_eq!(derated(&[]), 5.0);
+    let conditions = ["--set", "ratings.drive_altitude_m=3000", "--set", "ratings.drive_ambient_c=45"];
+    assert!((derated(&conditions) - 4.5).abs() < 1e-9, "{}", derated(&conditions));
+
+    for (typo, meant) in [
+        (format!("drive.{}.velocty_kp_nm_s_rad", ids[0]), format!("drive.{}.velocity_kp_nm_s_rad", ids[0])),
+        ("ratings.drive_altitud_m".to_string(), "ratings.drive_altitude_m".to_string()),
+    ] {
+        let out = cli(&["margins", entry.id, "--set", &format!("{typo}=1")]);
+        assert_eq!(out.status.code(), Some(2));
+        assert_eq!(text(&out.stderr).trim(), format!("Configuration value is missing: {typo} (did you mean {meant}?)"));
+    }
+}
+
+/// `--version` and `-V` print the program's name and version and succeed (they were refused as unknown options).
+#[test]
+fn version_prints_the_name_and_the_version() {
+    for flag in ["--version", "-V"] {
+        let out = cli(&[flag]);
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        assert_eq!(text(&out.stdout).trim(), format!("sim-cli {}", env!("CARGO_PKG_VERSION")), "{flag}");
+    }
 }
 
 /// The machine of one axis on a belt, found by its config: the tests name no machine.
@@ -450,7 +598,8 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
                 &sets.iter().flat_map(|s| ["--set", s.as_str()]).collect::<Vec<_>>(),
             ]
             .concat());
-            assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
+            // Unstable gains on purpose: the rows say FAIL and the exit code is 1.
+            assert_eq!(out.status.code(), Some(1), "{}: {}", entry.id, text(&out.stderr));
             let unstable = text(&out.stdout);
             assert!(unstable.lines().count() > 1, "{}: {unstable}", entry.id);
             unstable
@@ -653,7 +802,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
     let fewest = fewest_bounds();
     on_every_machine(|entry| {
         let run = cli(&["verdicts", entry.id]);
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert_judged(&run);
         let out = text(&run.stdout);
         let mut lines = out.lines();
         assert_eq!(lines.next().unwrap(), "check,motor,value,limit,result");
@@ -717,11 +866,11 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         // printed, nothing thermal. So their checks and values are those of the cycle from cold.
         let cold = ["--set", "effects.thermal_warm_start=false"];
         let run = cli(&[&["verdicts", entry.id][..], &cold].concat());
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert_judged(&run);
         let out = text(&run.stdout);
         let rows: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
         let run = cli(&[&["verdicts", entry.id, "--bands"][..], &cold].concat());
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert_judged(&run);
         let out = text(&run.stdout);
         assert_eq!(out.lines().next().unwrap(), "check,motor,value,limit,result,low,high,worst_case");
         let banded: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
@@ -743,7 +892,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         // With samples: all bounded values between their bounds at once, and the share of the runs that pass.
         let sampled = |seed: &str| {
             let run = cli(&[&["verdicts", entry.id, "--bands", "--samples", "6", "--seed", seed][..], &cold].concat());
-            assert!(run.status.success(), "{}", text(&run.stderr));
+            assert_judged(&run);
             text(&run.stdout)
         };
         let out = sampled("1");
@@ -789,7 +938,7 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
     // cycles once more.
     let cold = ["--set", "effects.thermal_warm_start=false"];
     let run = cli(&[&["verdicts", entry.id, "--bands", "--worst"][..], &cold].concat());
-    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert_judged(&run);
     let (out, mut cfg) = (text(&run.stdout), entry.config());
     cfg.set_text("effects.thermal_warm_start = false").unwrap();
     let bounded = bounds(&cfg).unwrap();
@@ -1021,7 +1170,7 @@ fn parts_are_named_on_the_command_line() {
         let geared = has_gearbox_ratings(&entry.config());
         let ratio = |extra: &[&str]| -> f64 {
             let out = cli(&[&["verdicts", entry.id], extra].concat());
-            assert!(out.status.success(), "{}", text(&out.stderr));
+            assert_judged(&out);
             let table = text(&out.stdout);
             // The torque at the gearbox output over the use of the motor's curve: another motor or ratio changes it.
             // Of the first motor the named parts reach: one with parts of its own (`[parts.<id>]`, the arm on a
@@ -1149,7 +1298,8 @@ fn a_run_can_stop_the_machine_and_stop_finds_the_worst_moment() {
     std::fs::write(&file, rated).unwrap();
     let out = cli(&["stop", entry.id, "--category", "1", "--points", "4", "--config", file.to_str().unwrap()]);
     std::fs::remove_file(&file).unwrap();
-    assert!(out.status.success(), "{}", text(&out.stderr));
+    // The stopping distance fails its rating (said below): the table is whole and the exit code is 1.
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
     let lines: Vec<Vec<String>> =
         text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(String::from).collect()).collect();
     let (worst, all) = lines.split_last().unwrap();
@@ -1360,6 +1510,225 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_on_the_command_line() {
             text(&keyless.stderr)
         );
     }
+}
+
+/// A file in the tests' scratch directory, named after the machine and the test.
+fn scratch(entry: &sim_core::MachineEntry, name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-{name}", entry.id));
+    path.to_str().unwrap().to_string()
+}
+
+/// `replay --tolerance` judges a twin: the table is one row per motor and limit, `FAIL` and exit code 1 where the
+/// replay is farther from the trace than the limit says. A trace recorded from the config itself replays within a limit
+/// of half the difference that a trace from a config with a 3 kg heavier carriage leaves (so the limit is hand-made from
+/// the machine's own numbers: the self-replay is some thousandth of it), the heavier machine's trace fails the same
+/// limit in both rows. Without the option the table is the old one.
+#[test]
+fn replay_judges_a_twin_against_stated_tolerances() {
+    let entry = one_belt_axis();
+    let (same, heavy) = (scratch(entry, "twin-same.csv"), scratch(entry, "twin-heavy.csv"));
+    let flags = ["--set", "effects.payload=false", "--set", "effects.encoder_resolution=false"];
+    for (path, extra) in [(&same, &[][..]), (&heavy, &["--set", "mass.carriage_kg=9"][..])] {
+        let run = cli(&[&["run", entry.id, "--cycle", "--time", "2.5", "--out", path][..], &flags[..], extra].concat());
+        assert!(run.status.success(), "{}", text(&run.stderr));
+    }
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    cfg.set_text("effects.encoder_resolution = false").unwrap();
+    let motors = (entry.build)(&cfg).unwrap().motors().to_vec();
+    let difference = |path: &str| {
+        let trace = sim_components::trace::Trace::parse(&std::fs::read_to_string(path).unwrap(), &motors).unwrap();
+        let replayed = sim_components::trace::replay(entry, &cfg, &trace).unwrap();
+        sim_components::trace::differences(&trace, &replayed)[0]
+    };
+    let (own, far) = (difference(&same), difference(&heavy));
+    let limits = [0.5 * far[0], 0.5 * far[1]];
+    assert!(own[0] < limits[0] && own[1] < limits[1], "self-replay {own:?}, heavier carriage {far:?}");
+    let tolerance = format!("torque_rms_nm={:e},torque_peak_nm={:e}", limits[0], limits[1]);
+    let judge =
+        |path: &str| cli(&[&["replay", entry.id, "--trace", path, "--tolerance", &tolerance][..], &flags[..]].concat());
+    let (good, bad) = (judge(&same), judge(&heavy));
+    assert_judged(&good);
+    assert_judged(&bad);
+    let rows = |out: &Output| text(&out.stdout).lines().map(String::from).collect::<Vec<_>>();
+    let motor = motors[0].id;
+    assert_eq!(
+        rows(&good),
+        [
+            "motor,quantity,value,limit,result".to_string(),
+            format!("{motor},torque_rms_nm,{:.6e},{:.6e},ok", own[0], limits[0]),
+            format!("{motor},torque_peak_nm,{:.6e},{:.6e},ok", own[1], limits[1]),
+        ]
+    );
+    assert_eq!(
+        rows(&bad)[1..],
+        [
+            format!("{motor},torque_rms_nm,{:.6e},{:.6e},FAIL", far[0], limits[0]),
+            format!("{motor},torque_peak_nm,{:.6e},{:.6e},FAIL", far[1], limits[1]),
+        ]
+    );
+    assert_eq!((good.status.code(), bad.status.code()), (Some(0), Some(1)));
+    // Without the option: the table of today, exit code 0 whatever the difference.
+    let plain = cli(&[&["replay", entry.id, "--trace", &heavy][..], &flags[..]].concat());
+    assert!(plain.status.success() && text(&plain.stdout).starts_with("motor,torque_rms_nm,torque_peak_nm,"));
+    // A limit that is no name=number of the table's columns is refused.
+    for bad in ["torque_rms=1", "torque_rms_nm=-1", "torque_rms_nm", "torque_rms_nm=x", ""] {
+        let run = cli(&["replay", entry.id, "--trace", &same, "--tolerance", bad]);
+        assert!(run.status.code() == Some(2) && run.stdout.is_empty(), "{bad:?}: {}", text(&run.stderr));
+    }
+}
+
+/// `fit --within N` judges the fit: each row gets `apart` (|fitted - config| / error, as the dataset report's "Apart") and
+/// a result. The config's own trace passes at 3 standard errors (the fit is within 0.9 of them over every machine, see
+/// `a_trace_from_run_replays_onto_itself_and_fits_its_own_config`), a trace from a carriage 1.5 kg heavier fails by
+/// some hundred (its mass is fitted to 0.01 kg) and the exit code is 1. Rows with no standard error or no config value
+/// are `not judged`. Without the option the table has its six columns.
+#[test]
+fn fit_within_judges_how_far_the_fit_is_from_the_config() {
+    let entry = one_belt_axis();
+    let (same, heavy) = (scratch(entry, "within-same.csv"), scratch(entry, "within-heavy.csv"));
+    let flags = ["--set", "effects.payload=false", "--set", "effects.encoder_resolution=false"];
+    for (path, extra) in [(&same, &[][..]), (&heavy, &["--set", "mass.carriage_kg=7.5"][..])] {
+        let run = cli(&[&["run", entry.id, "--cycle", "--time", "3", "--out", path][..], &flags[..], extra].concat());
+        assert!(run.status.success(), "{}", text(&run.stderr));
+    }
+    let fit = |path: &str, within: &str| {
+        cli(&[&["fit", entry.id, "--trace", path, "--within", within][..], &flags[..]].concat())
+    };
+    let table = |out: &Output| -> Vec<Vec<String>> {
+        text(&out.stdout).lines().map(|l| l.split(',').map(String::from).collect()).collect()
+    };
+
+    let good = fit(&same, "3");
+    assert_judged(&good);
+    assert_eq!(good.status.code(), Some(0), "{}", text(&good.stderr));
+    let rows = table(&good);
+    assert_eq!(rows[0].join(","), "quantity,of,config,fitted,standard_error,units,apart,result");
+    assert!(rows[1..].iter().all(|r| r.len() == 8 && ["ok", "not judged"].contains(&r[7].as_str())), "{rows:?}");
+    assert!(rows.iter().any(|r| r[0] == "moved_mass_kg" && r[7] == "ok"), "{rows:?}");
+
+    let bad = fit(&heavy, "3");
+    assert_judged(&bad);
+    assert_eq!(bad.status.code(), Some(1), "{}", text(&bad.stderr));
+    let rows = table(&bad);
+    let mass = rows.iter().find(|r| r[0] == "moved_mass_kg").unwrap();
+    let [config, fitted, error, apart] = [2, 3, 4, 6].map(|c| mass[c].parse::<f64>().unwrap());
+    // By hand from the row's own figures: 1.5 kg of 0.01 or less is 150 standard errors or more.
+    let by_hand = (fitted - config).abs() / error;
+    assert!(by_hand > 100.0 && (apart / by_hand - 1.0).abs() < 0.01 && mass[7] == "FAIL", "{mass:?}");
+    // The same table at a limit above every row's distance passes, and says how far each row was.
+    let loose = fit(&heavy, "1e15");
+    assert_eq!(loose.status.code(), Some(0), "{}", text(&loose.stderr));
+
+    // Without the option nothing changes; a limit of 0 or less is refused.
+    let plain = cli(&[&["fit", entry.id, "--trace", &same][..], &flags[..]].concat());
+    assert!(text(&plain.stdout).starts_with("quantity,of,config,fitted,standard_error,units\n"));
+    assert!(table(&plain).iter().all(|r| r.len() == 6));
+    for within in ["0", "-1", "x"] {
+        let run = fit(&same, within);
+        assert!(run.status.code() == Some(2) && run.stdout.is_empty(), "{within}: {}", text(&run.stderr));
+    }
+}
+
+/// `fit --write FILE` writes the one fitted value that is a single key of the config, the factor on the belt's stiffness
+/// (`--stiffness`), with `[bounds]` of `--sigmas` standard errors (2 by default) either side. The rows that several keys
+/// make up (the moved mass, the frictions) are named on the error stream and nothing else of the config changes. The file
+/// loads again, `verdicts --bands` reads its bounds, a bound that would cross a limit (a stiffness at 0) is pulled in, a
+/// failed fit writes nothing and a fit with nothing writable says so.
+#[test]
+fn fit_write_puts_the_fitted_stiffness_and_its_band_in_a_config_file() {
+    use sim_components::{analysis::bounds, load_config};
+    let entry = one_belt_axis();
+    let key = "belt.stiffness_ea_n";
+    let (cycle, written) = (scratch(entry, "write-cycle.csv"), scratch(entry, "write.toml"));
+    let flags = ["--set", "effects.payload=false"];
+    let run = cli(&[
+        &["run", entry.id, "--cycle", "--time", "3", "--out", &cycle, "--set", "belt.stiffness_ea_n=3.5e5"][..],
+        &flags[..],
+    ]
+    .concat());
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let _ = std::fs::remove_file(&written);
+    let fit =
+        |extra: &[&str]| cli(&[&["fit", entry.id, "--trace", &cycle, "--stiffness"][..], &flags[..], extra].concat());
+
+    let out = fit(&["--write", &written]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    let rows: Vec<Vec<&str>> = stdout.lines().skip(1).map(|l| l.split(',').collect()).collect();
+    let row = rows.iter().find(|r| r[0] == "stiffness_factor").unwrap();
+    let [factor, error] = [3, 4].map(|c| row[c].parse::<f64>().unwrap());
+    let base = entry.config().f64(key).unwrap();
+    let loaded = load_config(entry, &std::fs::read_to_string(&written).unwrap()).unwrap();
+    // The key holds the fitted value, to the figures of the table (7 digits), and its bound 2 standard errors either side
+    // (the error has 4 digits: 0.05 % of the half width of 2 * base * error).
+    let value = loaded.f64(key).unwrap();
+    assert!((value / (base * factor) - 1.0).abs() < 1e-6, "{value} against {base} x {factor}");
+    let band = bounds(&loaded).unwrap();
+    let (_, low, high) = band.iter().find(|b| b.0 == key).unwrap();
+    let tolerance = 2e-3 * base * error + 1e-6 * value;
+    assert!((low - base * (factor - 2.0 * error)).abs() < tolerance, "low {low}");
+    assert!((high - base * (factor + 2.0 * error)).abs() < tolerance, "high {high}");
+    // The factor is far from 1 (the trace is from a belt of 0.7 times the config's): the written value is the soft belt.
+    assert!((0.6..0.8).contains(&(value / base)), "{value}");
+
+    // The rest of the config is the config as the command line gave it, so that what several keys make up was not touched.
+    let mut expected = entry.config();
+    expected.set_text("effects.payload = false").unwrap();
+    sim_components::analysis::set_bounded(&mut expected, key, value).unwrap();
+    expected.set_text(&format!("bounds.{key} = [{low:?}, {high:?}]")).unwrap();
+    assert_eq!(loaded, expected);
+    // The values several keys make up are named, with the reason, and every one with a standard error.
+    assert!(rows.iter().any(|r| r[0] == "moved_mass_kg"), "{stdout}");
+    let stderr = text(&out.stderr);
+    for r in rows.iter().filter(|r| r[0] != "stiffness_factor" && !r[2].is_empty() && !r[4].is_empty()) {
+        assert!(stderr.contains(&format!("Not written: {} {}", r[0], r[1])), "{} {}: {stderr}", r[0], r[1]);
+    }
+    assert!(stderr.contains(&format!("Config written: {written}")), "{stderr}");
+
+    // The written bounds are read by `verdicts --bands` (two runs with every bounded value sampled between its bounds).
+    let verdicts = cli(&[
+        "verdicts",
+        entry.id,
+        "--config",
+        &written,
+        "--bands",
+        "--samples",
+        "2",
+        "--set",
+        "effects.thermal_warm_start=false",
+    ]);
+    assert_judged(&verdicts);
+    assert!(text(&verdicts.stdout).starts_with("check,motor,value,limit,result,low,high,worst_case,pass_share"));
+
+    // Three standard errors: the band is half again as wide.
+    let wider = scratch(entry, "write-3.toml");
+    let out = fit(&["--write", &wider, "--sigmas", "3"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let again = load_config(entry, &std::fs::read_to_string(&wider).unwrap()).unwrap();
+    let (_, low3, high3) = bounds(&again).unwrap().into_iter().find(|b| b.0 == key).unwrap();
+    assert!(((high3 - low3) / (high - low) - 1.5).abs() < 1e-3, "{low3} {high3} against {low} {high}");
+
+    // A band that would reach below 0 is pulled in to a stiffness the machine takes.
+    let wide = scratch(entry, "write-1000.toml");
+    assert!(fit(&["--write", &wide, "--sigmas", "1000"]).status.success());
+    let (_, low, high) = bounds(&load_config(entry, &std::fs::read_to_string(&wide).unwrap()).unwrap())
+        .unwrap()
+        .into_iter()
+        .find(|b| b.0 == key)
+        .unwrap();
+    assert!(low > 0.0 && low < 0.01 * value && high > value, "{low} {high}");
+
+    // A fit that failed writes nothing; a fit with nothing writable (no stiffness) says so and writes nothing; `--sigmas`
+    // belongs to `--write`.
+    let nothing = scratch(entry, "write-nothing.toml");
+    let _ = std::fs::remove_file(&nothing);
+    let failed = fit(&["--stiffness-key", "belt.no_such_key", "--write", &nothing]);
+    assert!(failed.status.code() == Some(2) && !std::path::Path::new(&nothing).exists());
+    let rigid = cli(&[&["fit", entry.id, "--trace", &cycle, "--write", &nothing][..], &flags[..]].concat());
+    assert!(rigid.status.code() == Some(2) && !std::path::Path::new(&nothing).exists(), "{}", text(&rigid.stderr));
+    assert!(text(&rigid.stderr).contains("Not written: moved_mass_kg"), "{}", text(&rigid.stderr));
+    assert_eq!(fit(&["--sigmas", "3"]).status.code(), Some(2));
 }
 
 /// A config file is checked against the machine's default config: a misspelt key was ignored and the
@@ -1919,9 +2288,11 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
     on_every_machine(|entry| {
         let html = dir.join(format!("{}-report.html", entry.id));
         let out = cli(&["report", entry.id, "--out", html.to_str().unwrap()]);
-        assert!(out.status.success(), "{}", text(&out.stderr));
         let html = std::fs::read_to_string(html).unwrap();
         let verdicts = cli(&["verdicts", entry.id]);
+        // The report passes or fails as the verdicts do: the same exit code.
+        assert_eq!(out.status.code(), verdicts.status.code(), "{}: {}", entry.id, text(&out.stderr));
+        assert_judged(&verdicts);
         let rows: Vec<Vec<String>> =
             text(&verdicts.stdout).lines().skip(1).map(|l| l.split(',').map(String::from).collect()).collect();
         assert!(!rows.is_empty());
@@ -1946,7 +2317,7 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
     // A PDF, in German, with a value set on top.
     let (id, pdf) = (MACHINES[0].id, dir.join("report.pdf"));
     let out = cli(&["report", id, "--set", "mass.payload_kg=2.5", "--lang", "de", "--out", pdf.to_str().unwrap()]);
-    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(out.status.code(), cli(&["verdicts", id, "--set", "mass.payload_kg=2.5"]).status.code());
     let pdf = std::fs::read(pdf).unwrap();
     assert!(pdf.starts_with(b"%PDF-1.4") && pdf.ends_with(b"%%EOF\n"));
     assert!(pdf.windows(b"(Freigabe)".len()).any(|w| w == b"(Freigabe)"), "German headings in the PDF");
@@ -1998,6 +2369,114 @@ fn search_takes_the_configs_own_supply() {
     assert!(text(&out.stderr).contains("0 / 1"), "{}", text(&out.stderr));
 }
 
+/// The user's price list on the second machine of the list, by hand: the 1FK2104-5AK at 700 and its paired drive at 120
+/// (one motor, so one of each) cost 820, printed in a `price` column beside `cost_kg`; a list without the drive leaves
+/// the cell empty and names the drive's part number on the error stream; without `--prices` the table is the same
+/// but for that column (header and row). `--rank-by price` without a list is refused with exit 2, before any search.
+#[test]
+fn search_prices_a_candidate_from_the_users_list_and_says_what_it_lacks() {
+    let drive = sim_components::catalog::paired_drive("1FK2104-5AK", "400v");
+    let dir = std::env::temp_dir().join(format!("sim-cli-prices-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, body: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let search = |extra: &[&str]| {
+        let mut args = vec!["search", MACHINES[1].id, "--series", "1FK2104-5AK"];
+        args.extend_from_slice(extra);
+        cli(&args)
+    };
+    let plain = search(&[]);
+    assert!(plain.status.success(), "{}", text(&plain.stderr));
+    let plain = text(&plain.stdout);
+    assert!(!plain.lines().next().unwrap().contains("price"), "{plain}");
+
+    let full = write("full.csv", &format!("# my supplier, EUR\npart_number,price\n\n1FK2104-5AK,700\n{drive},120\n"));
+    let priced = search(&["--prices", full.as_str()]);
+    assert!(priced.status.success(), "{}", text(&priced.stderr));
+    let priced = text(&priced.stdout);
+    let cut = |table: &str, with_price: bool| -> Vec<Vec<String>> {
+        table
+            .lines()
+            .map(|l| l.split(',').map(String::from).collect::<Vec<_>>())
+            .map(|mut f| {
+                if with_price {
+                    f.remove(8);
+                }
+                f
+            })
+            .collect()
+    };
+    // The same table with the price column taken out; the column sits right after cost_kg.
+    assert_eq!(cut(&priced, true), cut(&plain, false), "{priced}");
+    let head: Vec<&str> = priced.lines().next().unwrap().split(',').collect();
+    assert_eq!((head[7], head[8]), ("cost_kg", "price"), "{priced}");
+    let row = priced.lines().nth(1).unwrap().split(',').collect::<Vec<_>>();
+    assert_eq!(row[1], "1FK2104-5AK", "{priced}");
+    assert_eq!(row[8], "820.00", "{priced}");
+
+    let lacking = write("lacking.csv", "part_number,price\n1FK2104-5AK,700\n");
+    let partial = search(&["--prices", lacking.as_str()]);
+    assert!(partial.status.success(), "{}", text(&partial.stderr));
+    let row = text(&partial.stdout).lines().nth(1).unwrap().split(',').map(String::from).collect::<Vec<_>>();
+    assert_eq!(row[8], "", "{row:?}");
+    assert!(text(&partial.stderr).contains(drive), "{}", text(&partial.stderr));
+
+    let wanted = search(&["--rank-by", "price"]);
+    assert_eq!(wanted.status.code(), Some(2));
+    assert!(text(&wanted.stdout).is_empty() && text(&wanted.stderr).contains("--prices"), "{}", text(&wanted.stderr));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A drive's installation condition derates only a drive named from the catalogue: with the S210 6SL3210-5HE11-5UF0
+/// (5 A rated) at the rated 1000 m `drive-current` is judged against 5 A; with no drive part named the drive is the
+/// config's own by hand, which the condition cannot derate: refused with exit 2, naming the key.
+#[test]
+fn a_drive_condition_on_a_hand_entered_drive_is_refused() {
+    let entry = MACHINES[1];
+    let file = std::env::temp_dir().join(format!("sim-cli-derate-{}.toml", std::process::id()));
+    let text_of = entry.default_config.replacen("[ratings]\n", "[ratings]\ndrive_altitude_m = 1000.0\n", 1);
+    std::fs::write(&file, text_of).unwrap();
+    let config = file.to_str().unwrap();
+    let named =
+        cli(&["verdicts", entry.id, "--config", config, "--motor", "1FK2104-5AK", "--drive", "6SL3210-5HE11-5UF0"]);
+    let table = text(&named.stdout);
+    let row =
+        table.lines().find(|l| l.starts_with("drive-current,")).unwrap_or_else(|| panic!("{}", text(&named.stderr)));
+    assert_eq!(row.split(',').nth(3), Some("5.000"));
+    let hand = cli(&["verdicts", entry.id, "--config", config]);
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(hand.status.code(), Some(2), "{}", text(&hand.stderr));
+    assert!(text(&hand.stderr).contains("ratings.drive_altitude_m"), "{}", text(&hand.stderr));
+}
+
+/// A price list with a duplicate, a negative and a non-numeric price is refused with exit 2, naming the file and the
+/// line of the fault (the notes and blank lines count as lines); so is one without the header.
+#[test]
+fn a_faulty_price_list_is_refused_with_file_and_line() {
+    let dir = std::env::temp_dir().join(format!("sim-cli-prices-faulty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cases = [
+        ("duplicate.csv", "part_number,price\n# note\nA,1\n\nB,2\nA,3\n", ":6:", "A"),
+        ("negative.csv", "part_number,price\nA,1\nB,-2\n", ":3:", "B"),
+        ("text.csv", "part_number,price\nA,cheap\n", ":2:", "cheap"),
+        ("header.csv", "# a note\nA,1\n", ":2:", "A,1"),
+    ];
+    for (name, body, line, said) in cases {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        let file = path.to_string_lossy().into_owned();
+        let out = cli(&["search", MACHINES[1].id, "--series", "1FK2104-5AK", "--prices", file.as_str()]);
+        assert_eq!(out.status.code(), Some(2), "{name}");
+        let said_err = text(&out.stderr);
+        assert!(said_err.contains(&format!("{file}{line}")) && said_err.contains(said), "{name}: {said_err}");
+        assert!(text(&out.stdout).is_empty(), "{name}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// `modes --shapes` writes the app's mode list (`shapes::mode_views` at the start pose), and `workspace` its workspace
 /// map (`shapes::workspace_slice` at the middle of the third axis's range, with each motor's peak torque), on the first
 /// machine that has each; a machine whose motors move its tool as its axes has no map.
@@ -2044,12 +2523,109 @@ fn the_mode_shapes_and_the_workspace_map_are_written_as_csv() {
     assert_eq!(cli(&["workspace", flat.id]).status.code(), Some(2));
 }
 
-/// `--help` and `-h` print the usage on the output stream and succeed; they were refused as unknown options.
+/// `--help`, `-h` and `help` print the overview on the output stream and succeed: one command to a line, none of the
+/// lines wider than 100 columns (the usage was one line of 4.3 kB). `help COMMAND` and `COMMAND --help` print the part
+/// of that command alone; a usage error names that help in a line or two instead of printing everything.
 #[test]
-fn help_prints_the_usage() {
+fn help_prints_the_commands_one_to_a_line_and_the_options_of_one() {
+    let overview = text(&cli(&["help"]).stdout);
+    assert!(overview.lines().count() > 25 && overview.lines().all(|l| l.chars().count() <= 100), "{overview}");
+    assert!(overview.lines().any(|l| l.trim_start().starts_with("verdicts ")), "{overview}");
     for flag in ["--help", "-h"] {
         let out = cli(&[flag]);
-        assert!(out.status.success(), "{flag}");
-        assert!(text(&out.stdout).starts_with("Usage: sim-cli list"), "{flag}");
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        assert_eq!(text(&out.stdout), overview, "{flag}");
     }
+    let run = cli(&["help", "run"]);
+    assert_eq!(run.status.code(), Some(0));
+    let run = text(&run.stdout);
+    assert!(run.starts_with("sim-cli run MACHINE") && run.contains("--stop-category") && !run.contains("--bands"));
+    assert_eq!(text(&cli(&["run", "--help"]).stdout), run);
+    assert!(text(&cli(&["help", "verdicts", "--lang", "de"]).stdout).contains("Beurteilt"));
+    for topic in ["options", "paths", "units"] {
+        assert_eq!(cli(&["help", topic]).status.code(), Some(0), "{topic}");
+    }
+    // The errors: one line naming the command's help, or for an unknown word the way to the commands.
+    let wrong = cli(&["run"]);
+    assert_eq!(wrong.status.code(), Some(2));
+    let said = text(&wrong.stderr);
+    assert!(said.lines().count() == 1 && said.contains("sim-cli help run"), "{said}");
+    let unknown = cli(&["nonsense"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(text(&unknown.stderr).contains("nonsense") && text(&unknown.stderr).lines().count() == 1);
+    assert_eq!(cli(&["help", "nonsense"]).status.code(), Some(2));
+    assert_eq!(cli(&[]).status.code(), Some(2));
+}
+
+/// `tune` with targets no gain meets (at the start pose alone, to keep the run short): the rows say FAIL, the exit code
+/// is 1 (judged), and the error stream has the `--set` words and says the targets are not met. Its help says how it
+/// differs from `tuning`, in both languages.
+#[test]
+fn tune_exits_1_where_its_targets_are_not_met() {
+    let id = one_belt_axis().id;
+    let out = cli(&["tune", id, "--set", "cycle.segment=[]", "--phase-margin", "179", "--gain-margin", "80"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    let rows = text(&out.stdout);
+    assert!(rows.starts_with("motor,key,before,after,") && rows.contains("drive.velocity_kp_nm_s_rad"), "{rows}");
+    assert!(rows.lines().skip(1).all(|l| l.ends_with(",FAIL")), "{rows}");
+    assert!(text(&out.stderr).contains("--set drive.velocity_kp_nm_s_rad="), "{}", text(&out.stderr));
+    for lang in ["en", "de"] {
+        let help = text(&cli(&["help", "tune", "--lang", lang]).stdout);
+        assert!(help.contains("tuning") && help.contains("--no-notch"), "{lang}: {help}");
+    }
+}
+
+/// `verdicts` says where the machine's own parts are not checked: the screw axis (its payload sits on its carriage, the
+/// two joined, nothing else) has no row "self-collision" and says so on the error stream; the six-axis arm, with links
+/// to compare, has the row and tells the planned cycle's least clearance between its parts instead.
+#[test]
+fn verdicts_say_where_the_machines_own_parts_are_not_checked() {
+    for (id, checked) in [("screw-axis", false), ("urdf-arm", true)] {
+        let out = cli(&["verdicts", id]);
+        assert_judged(&out);
+        let row = text(&out.stdout).lines().any(|l| l.starts_with("self-collision,"));
+        let said = text(&out.stderr).contains("not checked against each other");
+        let figure = text(&out.stderr).contains("least clearance between the machine's own parts");
+        assert_eq!((row, said, figure), (checked, !checked, checked), "{id}: {}", text(&out.stderr));
+    }
+}
+
+/// `parameters` prints the header and, for the first machine with two motors with an S210 converter by name (`--drive`),
+/// the speed controller's gain as the p1460 row of each motor with the config's number unchanged, says on the error
+/// stream that it is an aid to be checked against the firmware, and exits 0; without a drive part it exits 2 with nothing
+/// on standard output, and `--family` makes the list (an S120's Kv parameter p2538 comes up; a family that is none is
+/// refused).
+#[test]
+fn parameters_lists_the_drive_parameters_and_refuses_a_machine_without_a_catalogue_drive() {
+    let two = |e: &&sim_core::MachineEntry| (e.build)(&e.config()).unwrap().motors().len() == 2;
+    let machine = MACHINES.iter().copied().find(two).unwrap().id;
+    let s210 = ["--drive", "6SL3210-5HE11-5UF0"];
+    let out = cli(&[&["parameters", machine][..], &s210].concat());
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    let mut lines = stdout.lines();
+    assert_eq!(lines.next(), Some("motor,key,value,unit,parameter,name,parameter_value,parameter_unit,basis"));
+    let kp: Vec<Vec<&str>> =
+        stdout.lines().filter(|l| l.contains(",velocity_kp_nm_s_rad,")).map(|l| l.split(',').collect()).collect();
+    assert_eq!(kp.len(), 2, "one per motor: {stdout}");
+    for f in &kp {
+        assert_eq!(
+            (f.len(), f[3], f[4], f[5], f[7], f[8]),
+            (9, "N m s/rad", "p1460", "Speed controller P gain", "Nms/rad", "printed")
+        );
+        assert_eq!(f[2], f[6], "Kp is kept");
+    }
+    assert!(stdout.lines().any(|l| l.contains(",current_kp_v_a,") && l.ends_with(",,,,none")), "{stdout}");
+    assert!(text(&out.stderr).contains("commissioning") && text(&out.stderr).contains("firmware"));
+    let german = text(&cli(&[&["parameters", machine, "--lang", "de"][..], &s210].concat()).stderr);
+    assert!(german.contains("Inbetriebnahme"), "{german}");
+
+    let none = cli(&["parameters", machine]);
+    assert_eq!((none.status.code(), none.stdout.is_empty()), (Some(2), true));
+    assert!(text(&none.stderr).contains("--family"), "{}", text(&none.stderr));
+    let s120 = cli(&["parameters", machine, "--family", "s120"]);
+    assert_eq!(s120.status.code(), Some(0), "{}", text(&s120.stderr));
+    assert!(text(&s120.stdout).contains(",p2538,"));
+    assert_eq!(cli(&["parameters", machine, "--family", "g120"]).status.code(), Some(2));
+    assert!(text(&cli(&["help", "parameters"]).stdout).contains("--family"));
 }

@@ -1,0 +1,22 @@
+config_key,parameter,name,unit,factor,rule,basis,source,note
+velocity_kp_nm_s_rad,p1460,Speed controller P gain adaptation speed lower,Nms/rad,1,,printed,lh1-660,Torque at the motor shaft per speed error at the motor shaft; p1461 scales it above the adaptation speed p1465 only
+velocity_tn_s,p1462,Speed controller integral time adaptation speed lower,ms,1000,,printed,lh1-662,Tn of Kp (1 + 1/(Tn s)); p1463 scales it above p1465 only
+kv_1_s,p2538,LR proportional gain,1000 rpm,0.06,,derived,lh1-1013,Kv [1/s] = 16.667 x p2538 (1000/60); the manual prints the unit [1000 rpm] and its p5275 example (5 ms PT1 = Kv 12 = 200 1/s) fixes the factor (page 1440); needs the function module position control
+velocity_feedforward_factor,p2534,LR speed precontrol factor,%,100,,printed,lh1-1012,Weight of the speed precontrol of the position controller (0 = off); needs the function module position control
+precontrol_balance_s,p2536,LR speed precontrol symmetrizing filter PT1,ms,1000,,derived,lh1-1013,PT1 that emulates the closed speed loop for the speed precontrol of the position controller; the dead time p2535 is not modelled; p1429 symmetrizes the speed setpoint of the speed controller for torque precontrol and is not this
+current_tn_s,p1717,Current controller integral-action time,ms,1000,,printed,lh1-760,Tn = L/R is the same in the simulator's winding and in the drive's
+velocity_filter_s,p1441,Actual speed smoothing time,ms,1000,,printed,lh1-648,PT1 on the actual speed; the simulator's filter is a first-order low pass of this time constant
+notch_frequency_hz,p1657,Current setpoint filter 1 type,-,2,constant,printed,lh1-745,2 = general 2nd order filter (1 is a PT2 low pass); filter 1 is switched on with bit 0 of p1656; filters 2 to 4 are p1662 to p1676
+notch_frequency_hz,p1658,Current setpoint filter 1 denominator natural frequency,Hz,1,,printed,lh1-745,Notch centre
+notch_frequency_hz,p1660,Current setpoint filter 1 numerator natural frequency,Hz,1,,printed,lh1-746,The same centre in numerator and denominator makes a bandstop filter
+notch_bandwidth_hz,p1659,Current setpoint filter 1 denominator damping,-,1,notch_damping,derived,lh1-746,D = bandwidth / (2 x centre) from the manual's f_3dB = 2 x D x f_notch (page 745); the simulator's bandwidth is the -3 dB width of a second order notch
+notch_bandwidth_hz,p1661,Current setpoint filter 1 numerator damping,-,0,zero,derived,lh1-746,Numerator damping 0 suppresses the centre completely as the simulator's notch does (page 745)
+peak_torque_nm,p1520,CO: Torque limit upper/motoring,Nm,1,,printed,lh1-689,At the motor shaft; the drive's limit is constant where the simulator's falls with the torque-speed curve
+peak_torque_nm,p1521,CO: Torque limit lower/regenerative,Nm,-1,,derived,lh1-690,The lower limit is negative
+max_speed_rad_s,p1082,Maximum speed,rpm,9.549296585513721,,printed,lh1-514,60/(2 pi) rpm per rad/s; p1083 and p1086 (210000 rpm as delivered) limit each direction further
+off1_ramp_s,p1121,Ramp-function generator ramp-down time,s,1,ramp_time,derived,lh1-528,p1121 is the time from the maximum speed p1082 to standstill; the simulator's is from the rated speed: p1121 = ramp x p1082 / rated speed
+off3_ramp_s,p1135,OFF3 ramp-down time,s,1,ramp_time,derived,lh1-530,As p1121: from the maximum speed p1082
+pulse_off_speed_rad_s,p1226,Threshold for zero speed detection,rpm,9.549296585513721,,printed,lh1-565,Standstill is identified below it when braking with OFF1 or OFF3
+blocked_speed_rad_s,p2175,Motor blocked speed threshold,rpm,9.549296585513721,,printed,lh1-958,With p2177 for F07900
+blocked_time_s,p2177,Motor blocked delay time,s,1,,printed,lh1-959,With p2175 for F07900
+standstill_time_s,p2543,LR standstill monitoring time,ms,1000,,printed,lh1-1015,Needs the function module position control; the window p2542 is in length units and has no row

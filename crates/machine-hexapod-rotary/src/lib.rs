@@ -206,7 +206,8 @@ pub fn segment_distance(p0: V3, p1: V3, q0: V3, q1: V3) -> f64 {
 }
 
 /// One leg at a pose: the crank's tip C, its tangent t and second derivative t2 by the crank angle, the platform joint
-/// P and its offset b = R a from the platform centre, the rod's unit vector u from C to P, and the torque arm u . t.
+/// P and its offset b = R a from the platform centre, the rod's unit vector u from C to P and its length |P - C|, the
+/// torque arm u . t, and the cosine of the crank angle.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Leg {
     pub tip: V3,
@@ -215,7 +216,19 @@ pub struct Leg {
     pub joint: V3,
     pub b: V3,
     pub u: V3,
+    pub length: f64,
     pub arm: f64,
+    pub cos: f64,
+}
+
+/// A crank at its angle, which depends on the angle alone (not on the platform's pose): the tip, the tangent, the second
+/// derivative and the cosine of the angle.
+#[derive(Debug, Clone, Copy)]
+pub struct Crank {
+    pub tip: V3,
+    pub t: V3,
+    pub t2: V3,
+    pub cos: f64,
 }
 
 /// The kinematics, apart from masses and drives.
@@ -317,14 +330,21 @@ impl Geometry {
     }
 
     /// Crank i's tip, tangent and second derivative at the angle theta.
-    pub fn tip(&self, i: usize, theta: f64) -> [V3; 3] {
+    pub fn tip(&self, i: usize, theta: f64) -> Crank {
         let (s, c) = theta.sin_cos();
         let (r, d) = (self.crank, self.dir[i]);
-        [
-            add(self.base[i], scale(add(scale(d, c), scale(Z, s)), r)),
-            scale(add(scale(d, -s), scale(Z, c)), r),
-            scale(add(scale(d, c), scale(Z, s)), -r),
-        ]
+        Crank {
+            tip: add(self.base[i], scale(add(scale(d, c), scale(Z, s)), r)),
+            t: scale(add(scale(d, -s), scale(Z, c)), r),
+            t2: scale(add(scale(d, c), scale(Z, s)), -r),
+            cos: c,
+        }
+    }
+
+    /// The six cranks at the angles `q`: what a Newton iteration over the platform's pose keeps, since the cranks do not
+    /// move with it.
+    pub fn cranks(&self, q: &[f64]) -> [Crank; 6] {
+        std::array::from_fn(|i| self.tip(i, q[i]))
     }
 
     /// The crank angle that puts crank i's rod onto the platform joint at `joint` (closed form); `None` out of reach.
@@ -341,13 +361,19 @@ impl Geometry {
 
     /// The legs at crank angles `q` with the platform at `p` turned by `r`.
     pub fn legs_at(&self, q: &[f64], p: V3, r: &M3) -> [Leg; 6] {
+        self.legs_on(&self.cranks(q), p, r)
+    }
+
+    /// `legs_at` with the cranks (`cranks`) known.
+    fn legs_on(&self, cranks: &[Crank; 6], p: V3, r: &M3) -> [Leg; 6] {
         std::array::from_fn(|i| {
-            let [tip, t, t2] = self.tip(i, q[i]);
+            let Crank { tip, t, t2, cos } = cranks[i];
             let b = mul(r, self.anchors[i]);
             let joint = add(p, b);
             let d = sub(joint, tip);
-            let u = scale(d, 1.0 / norm(d));
-            Leg { tip, t, t2, joint, b, u, arm: dot(u, t) }
+            let length = norm(d);
+            let u = scale(d, 1.0 / length);
+            Leg { tip, t, t2, joint, b, u, length, arm: dot(u, t), cos }
         })
     }
 
@@ -391,6 +417,11 @@ impl Geometry {
     /// The platform's centre and rotation for crank angles, by Newton's method from `home`; `None` where it does not
     /// converge.
     pub fn pose(&self, q: &[f64]) -> Option<(V3, M3)> {
+        self.pose_on(&self.cranks(q), q)
+    }
+
+    /// `pose` with the cranks at `q` known.
+    fn pose_on(&self, cranks: &[Crank; 6], q: &[f64]) -> Option<(V3, M3)> {
         let dq: [f64; 6] = std::array::from_fn(|c| q[c] - self.home_q[c]);
         let guess: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| self.home_k[r * 6 + c] * dq[c]).sum());
         // Far from home (or out of reach of the guess) Newton starts from home itself.
@@ -398,14 +429,14 @@ impl Geometry {
         let guess = if ok { guess } else { [0.0; 6] };
         let p = add([self.home[0], self.home[1], self.home[2]], [guess[0], guess[1], guess[2]]);
         let r = matmul(&exp([guess[3], guess[4], guess[5]]), &Self::rotation(&self.home));
-        self.pose_from(q, p, r)
+        self.pose_from(cranks, p, r)
     }
 
-    /// `pose`'s Newton from the platform at `p` turned by `r`.
-    fn pose_from(&self, q: &[f64], mut p: V3, mut r: M3) -> Option<(V3, M3)> {
+    /// `pose`'s Newton from the platform at `p` turned by `r`, for the cranks at the angles asked for.
+    fn pose_from(&self, cranks: &[Crank; 6], mut p: V3, mut r: M3) -> Option<(V3, M3)> {
         for _ in 0..40 {
-            let legs = self.legs_at(q, p, &r);
-            let miss: [f64; 6] = std::array::from_fn(|i| self.rod - norm(sub(legs[i].joint, legs[i].tip)));
+            let legs = self.legs_on(cranks, p, &r);
+            let miss: [f64; 6] = std::array::from_fn(|i| self.rod - legs[i].length);
             let worst = miss.iter().fold(0.0f64, |m, v| m.max(v.abs()));
             if !worst.is_finite() {
                 return None;
@@ -731,7 +762,8 @@ impl RotaryPlatform {
     /// The platform's motion at crank angles q and rates qd; `None` where the forward kinematics fails or A is
     /// singular.
     fn motion(&self, q: &[f64], qd: &[f64]) -> Option<Motion> {
-        self.motion_at(q, qd, self.geo.pose(q)?)
+        let cranks = self.geo.cranks(q);
+        self.motion_at(&cranks, qd, self.geo.pose_on(&cranks, q)?)
     }
 
     /// `motion` for the dynamics, which runs four times a sub-step: Newton starts from the pose at the nearest point of
@@ -740,29 +772,31 @@ impl RotaryPlatform {
     /// leave its cell. The pose differs from `forward`'s by Newton's tolerance (1e-12 m on the rods, and one step more).
     fn warm_motion(&self, q: &[f64], qd: &[f64]) -> Option<Motion> {
         let key: [i64; 6] = std::array::from_fn(|i| (q[i] / ANCHOR_STEP).round() as i64);
+        let cranks = self.geo.cranks(q);
         let anchor = self.last.get().filter(|f| f.key == key).or_else(|| {
             let g: [f64; 6] = std::array::from_fn(|i| key[i] as f64 * ANCHOR_STEP);
-            let (p, r) = self.geo.pose(&g)?;
-            let found = Found { key, q: g, p, r, k: self.motion_at(&g, &[0.0; 6], (p, r))?.k };
+            let at_grid = self.geo.cranks(&g);
+            let (p, r) = self.geo.pose_on(&at_grid, &g)?;
+            let found = Found { key, q: g, p, r, k: self.motion_at(&at_grid, &[0.0; 6], (p, r))?.k };
             self.last.set(Some(found));
             Some(found)
         });
         let warm = anchor.and_then(|f| {
             let xi: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| f.k[r * 6 + c] * (q[c] - f.q[c])).sum());
-            self.geo.pose_from(q, add(f.p, [xi[0], xi[1], xi[2]]), matmul(&exp([xi[3], xi[4], xi[5]]), &f.r))
+            self.geo.pose_from(&cranks, add(f.p, [xi[0], xi[1], xi[2]]), matmul(&exp([xi[3], xi[4], xi[5]]), &f.r))
         });
         let pose = match warm {
             Some(pose) => pose,
-            None => self.geo.pose(q)?,
+            None => self.geo.pose_on(&cranks, q)?,
         };
-        self.motion_at(q, qd, pose)
+        self.motion_at(&cranks, qd, pose)
     }
 
     /// `motion` with the platform's centre and rotation known.
-    fn motion_at(&self, q: &[f64], qd: &[f64], (p, r): (V3, M3)) -> Option<Motion> {
+    fn motion_at(&self, cranks: &[Crank; 6], qd: &[f64], (p, r): (V3, M3)) -> Option<Motion> {
         let rv = log(&r);
         let tool = [p[0], p[1], p[2], rv[0], rv[1], rv[2]];
-        let legs = self.geo.legs_at(q, p, &r);
+        let legs = self.geo.legs_on(cranks, p, &r);
         let lu = Lu::of(&Geometry::constraint(&legs))?;
         let mut k = [0.0; 36];
         for c in 0..6 {
@@ -887,7 +921,7 @@ impl Mechanism for RotaryPlatform {
             }
             mass[i * 6 + i] += self.crank_inertia + rod / 3.0 * dot(leg.t, leg.t);
             bias[i] += rod / 6.0 * dot(leg.t, a_high)
-                + self.g * (self.crank_mass * self.crank_cg + 0.5 * rod * self.geo.crank) * q[i].cos();
+                + self.g * (self.crank_mass * self.crank_cg + 0.5 * rod * self.geo.crank) * leg.cos;
         }
     }
 

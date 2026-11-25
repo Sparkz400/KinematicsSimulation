@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -259,3 +260,181 @@ def test_over_stdio_as_a_client_starts_it():
     assert len(tools.tools) == 17
     assert [m["id"] for m in r.structured_content["machines"]] == [m["id"] for m in ks.machines()]
     json.dumps(r.structured_content)
+
+
+# --- file settings: read only inside the operator's input folder ------------------------------------------------------
+
+
+def _machine_with(key):
+    """A machine whose default config has `key` (no machine is named in the tests)."""
+    return next(m["id"] for m in ks.machines() if key in ks.Config(m["id"]).leaves())
+
+
+def _toml_with(machine, key, value):
+    """The default config of `machine` as TOML with the file setting `key` set to `value`."""
+    leaf = key.split(".")[1]
+    line = f"{leaf} = {json.dumps(value)}"  # a function as the replacement: a string's backslashes would be escapes
+    return re.sub(rf"^{leaf} = .*$", lambda _: line, ks.Config(machine).to_toml(), flags=re.M)
+
+
+def _refusals(*steps):
+    """The error text of steps that must all be refused with one and the same text."""
+    out = calls(*steps)
+    assert all(error for error, _ in out), out
+    texts = {text.split(": ", 1)[1] for _, text in out}  # without the "Error executing tool <name>" lead
+    assert len(texts) == 1, out
+    return texts.pop()
+
+
+def test_file_settings_are_refused_outside_the_input_folder(tmp_path, monkeypatch):
+    # Shows: a model cannot make the core open a path of its choosing (urdf_file, table_file), nor tell whether it
+    # exists: the same fixed text for a file that exists, one that does not and one reached by `..`, on both entry
+    # points (also as a table); built-in and empty values and a file inside the folder work.
+    arm, cam = _machine_with("arm.urdf_file"), _machine_with("cam.table_file")
+    inside = tmp_path / "in"
+    inside.mkdir()
+    # A machine crate's own URDF, found without naming the machine (architecture.rs forbids that outside its crate).
+    (inside / "arm.urdf").write_text(next(ROOT.glob("crates/machine-*/urdf/six-axis.urdf")).read_text())
+    (inside / "cam.csv").write_text((ROOT / "examples/press-cam.csv").read_text())
+    (tmp_path / "secret.csv").write_text("a,b\n")
+    monkeypatch.setenv("KINEMATICS_SIM_MCP_IN_DIR", str(inside))
+    paths = [str(tmp_path / "secret.csv"), str(tmp_path / "missing.csv"), str(inside / ".." / "secret.csv"),
+             str(inside / ".." / "missing.csv"), "no/such/file"]
+
+    for machine, key in ((arm, "arm.urdf_file"), (cam, "cam.table_file")):
+        section, leaf = key.split(".")
+        call("create_session", name="s", machine=machine)
+        before = server._sessions["s"][key]
+        steps = [("create_session", {"name": "t", "machine": machine, "toml": _toml_with(machine, key, p)}) for p in paths]
+        steps += [("set_config_values", {"session": "s", "values": {key: p}}) for p in paths]
+        steps += [("set_config_values", {"session": "s", "values": {section: {leaf: paths[0]}}})]
+        text = _refusals(*steps)
+        assert "KINEMATICS_SIM_MCP_IN_DIR" in text and not any(p in text for p in paths)
+        assert server._sessions["s"][key] == before and "t" not in server._sessions  # nothing was changed or made
+
+    # Text the server's own TOML parser cannot read is refused before the core sees it (the core's parser might read
+    # it and open what it names): no session is made, and the path is not in the answer.
+    if sys.version_info >= (3, 11):
+        unread = _toml_with(arm, "arm.urdf_file", paths[0]) + "\nbroken = [1, 2\n"
+        text = _refusals(("create_session", {"name": "u", "machine": arm, "toml": unread}))
+        assert "the TOML text could not be read" in text and paths[0] not in text and "u" not in server._sessions
+
+    # Allowed: the built-in name and the empty value (the defaults), and a file inside the folder, on both paths.
+    for machine, key, name in ((arm, "arm.urdf_file", "arm.urdf"), (cam, "cam.table_file", "cam.csv")):
+        call("create_session", name="d", machine=machine, toml=ks.Config(machine).to_toml())
+        call("set_config_values", session="d", values={key: str(inside / name)})
+        call("create_session", name="e", machine=machine, toml=_toml_with(machine, key, str(inside / name)))
+        assert server._sessions["e"][key] == str(inside / name)
+
+    # Without the variable nothing but the defaults is allowed.
+    monkeypatch.delenv("KINEMATICS_SIM_MCP_IN_DIR")
+    _refusals(("set_config_values", {"session": "d", "values": {"cam.table_file": str(inside / "cam.csv")}}))
+
+
+def test_a_link_out_of_the_input_folder_is_refused(tmp_path, monkeypatch):
+    # Shows: the path is compared after resolving it, so a symlink inside the folder to a file outside is refused.
+    inside = tmp_path / "in"
+    inside.mkdir()
+    (tmp_path / "out.csv").write_text("a,b\n")
+    try:
+        (inside / "link.csv").symlink_to(tmp_path / "out.csv")
+    except OSError:
+        pytest.skip("no symlinks here")
+    monkeypatch.setenv("KINEMATICS_SIM_MCP_IN_DIR", str(inside))
+    call("create_session", name="c", machine=_machine_with("cam.table_file"))
+    _refusals(("set_config_values", {"session": "c", "values": {"cam.table_file": str(inside / "link.csv")}}))
+
+
+def test_a_file_over_the_size_limit_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("KINEMATICS_SIM_MCP_IN_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "MAX_INPUT_BYTES", 3)
+    (tmp_path / "big.csv").write_text("a,b\n1,2\n")
+    call("create_session", name="c", machine=_machine_with("cam.table_file"))
+    _refusals(("set_config_values", {"session": "c", "values": {"cam.table_file": str(tmp_path / "big.csv")}}))
+
+
+def test_loop_margins_keeps_the_worst_rows_when_it_caps(monkeypatch):
+    # Shows: the rows are sorted (failing first, then the smallest phase margin, an unmeasurable one after the
+    # measured ones) before the cap, so the worst row survives `top`, and rows_left_out counts the rest.
+    fake = {
+        "run": [""] * 6, "motor": list("abcdef"), "ok": np.array([True, True, True, True, False, True]),
+        "phase_margin_deg": np.array([60.0, 45.0, float("nan"), 30.0, 10.0, 50.0]),
+    }
+    monkeypatch.setattr(ks, "margins", lambda cfg, bands=False: fake)
+    out = call("loop_margins", session=GANTRY, top=2)
+    assert [r["motor"] for r in out["rows"]] == ["e", "d"]
+    assert out["row_count"] == 6 and out["rows_left_out"] == 4
+    assert [r["motor"] for r in call("loop_margins", session=GANTRY, top=6)["rows"]] == ["e", "d", "b", "f", "a", "c"]
+
+
+def test_a_call_given_up_at_the_timeout_is_cancelled_and_its_thread_ends(monkeypatch):
+    # Uncancelled this 3000-run band calculation takes minutes on all processors (it used to be left running to its
+    # end after the timeout); with the call's job cancelled it ends with the runs under way: 5 s here, and two minutes
+    # are allowed for a runner several times slower.
+    import threading
+
+    finished = threading.Event()
+
+    def long_call():
+        try:
+            return ks.verdicts(ks.Config(GANTRY), bands=True, samples=3000)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(server, "TIMEOUT_S", 1.0)
+    with pytest.raises(server.ToolError, match="did not finish within"):
+        anyio.run(server._call, None, "verdicts", long_call)
+    assert finished.wait(120), "the thread of the given-up call still computes"
+
+
+def test_the_progress_of_a_call_increases_with_every_notice(monkeypatch):
+    # MCP wants each progress notice above the last. A job's runs stand still while a run lasts longer than the
+    # interval: notices every 20 ms over a bands run of a few seconds meet such pauses, and every notice must still rise.
+    notices = []
+
+    class Ctx:
+        async def report_progress(self, progress, total, message):
+            notices.append((progress, total, message))
+
+    monkeypatch.setattr(server, "HEARTBEAT_S", 0.02)
+    anyio.run(server._call, Ctx(), "verdicts", lambda: ks.verdicts(ks.Config(AXIS), bands=True, samples=40))
+    progress = [p for p, _, _ in notices]
+    assert len(progress) > 10 and all(b > a for a, b in zip(progress, progress[1:])), progress
+    assert any(" runs" in m for _, _, m in notices)  # the runs are named in the message
+
+
+def test_a_panic_of_the_core_is_an_error_of_the_tool_not_the_end_of_the_server():
+    class PanicException(BaseException):  # pyo3_runtime.PanicException, which cannot be imported by name
+        pass
+
+    def broken():
+        raise PanicException("the model panicked")
+
+    with pytest.raises(server.ToolError, match="failed internally"):
+        anyio.run(server._call, None, "margins", broken)
+
+
+def test_the_sessions_are_bounded_and_the_least_recently_used_is_dropped():
+    names = [f"s{i}" for i in range(server.MAX_SESSIONS)]
+    steps = [("create_session", {"name": n, "machine": AXIS}) for n in names]
+    steps += [("get_config", {"session": names[0], "prefix": "mass."})]
+    steps += [("create_session", {"name": "one-more", "machine": AXIS})]
+    results = calls(*steps)
+    assert not any(error for error, _ in results)
+    last = results[-1][1]
+    assert last["dropped_session"] == names[1] and len(last["sessions"]) == server.MAX_SESSIONS
+    assert names[0] in server._sessions and names[1] not in server._sessions
+    # A session that is replaced is not a new one.
+    ((_, replaced),) = calls(("create_session", {"name": "one-more", "machine": AXIS}))
+    assert "dropped_session" not in replaced
+
+
+def test_the_counts_that_multiply_the_work_are_bounded():
+    runs, points, repeats = calls(
+        ("optimise_cycle", {"session": AXIS, "runs": server.MAX_RUNS + 1}),
+        ("positioning_accuracy", {"session": AXIS, "points": server.MAX_POINTS + 1}),
+        ("positioning_accuracy", {"session": AXIS, "repeats": server.MAX_REPEATS + 1}),
+    )
+    assert runs[0] and f"limit of {server.MAX_RUNS}" in runs[1]
+    assert points[0] and f"limit of {server.MAX_POINTS}" in points[1]
+    assert repeats[0] and f"limit of {server.MAX_REPEATS}" in repeats[1]

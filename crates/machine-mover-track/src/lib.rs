@@ -1242,6 +1242,12 @@ impl Machine for MoverTrack {
     fn collision_capsules(&self, state: &[f64]) -> Vec<sim_core::Capsule> {
         self.inner.collision_capsules(state)
     }
+    fn self_collision_capsules(&self, state: &[f64]) -> Vec<sim_core::Capsule> {
+        self.inner.self_collision_capsules(state)
+    }
+    fn connected_bodies(&self, state: &[f64], boxes: usize, capsules: usize) -> Option<Vec<(usize, usize)>> {
+        self.inner.connected_bodies(state, boxes, capsules)
+    }
     fn friction_contacts(&self) -> Vec<FrictionContact> {
         self.inner.friction_contacts()
     }

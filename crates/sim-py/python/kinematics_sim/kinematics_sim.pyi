@@ -1,24 +1,46 @@
 """Type stubs of the native module kinematics_sim.kinematics_sim (crates/sim-py/src/lib.rs), re-exported by the package."""
 
 from os import PathLike
-from typing import Any, Literal, Sequence, TypedDict, final
+from typing import Any, Callable, Literal, Sequence, TypeVar, TypedDict, final
 
 import numpy as np
 import numpy.typing as npt
 
 __version__: str
 __all__ = [
-    "Config", "Sim", "machines", "signals", "label", "run", "analyze", "verdicts", "sizing", "sweep", "optimise", "fit", "identify",
+    "Config", "Sim", "Job", "Cancelled", "machines", "signals", "label", "run", "analyze", "verdicts", "sizing", "sweep", "optimise", "fit", "identify",
     "step", "bode", "tuning", "margins", "modes", "sensitivity", "global_sensitivity", "replay", "compare", "report", "check_dataset", "fmu",
     "accuracy", "__version__",
 ]
 
+T = TypeVar("T")
 FloatArray = npt.NDArray[np.float64]
 BoolArray = npt.NDArray[np.bool_]
 
 class MachineRow(TypedDict):
     id: str
     name: str
+
+class Cancelled(Exception):
+    """A `Job` was cancelled while its callable ran."""
+
+@final
+class Job:
+    """A long analysis to watch and stop from another thread: every function `run`'s callable calls belongs to it."""
+
+    def __init__(self) -> None: ...
+    def cancel(self) -> None:
+        """Stops the job from any thread: no new run starts, `run` raises `Cancelled` when the ones under way end."""
+    @property
+    def done(self) -> int:
+        """Runs finished so far."""
+    @property
+    def total(self) -> int:
+        """Runs planned so far (later batches add to it)."""
+    @property
+    def cancelled(self) -> bool: ...
+    def run(self, callable: Callable[[], T]) -> T:
+        """`callable()` on this thread as part of the job; raises `Cancelled` where the job was cancelled."""
 
 @final
 class Config:

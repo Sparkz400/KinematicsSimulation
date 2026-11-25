@@ -31,8 +31,9 @@ use bevy_egui::{
     PrimaryEguiContext, egui,
 };
 use sim_app::model::{Analysis, Message, Model};
-use sim_app::runs::{History, Run, RunKind, trail_until};
+use sim_app::runs::{History, Run, RunKind, Units, trail_until};
 use sim_app::session::{Event, Request, Session, TrailPoint};
+use sim_app::settings::{self, Settings};
 use sim_app::video;
 use sim_components::Command;
 use sim_core::{Config, Part, Scene, Shape};
@@ -97,6 +98,17 @@ struct State {
     notes: std::sync::Arc<std::sync::Mutex<Vec<Message>>>,
     /// What floats over the 3D view this frame: its controls, the timeline and the tool view.
     covered: Vec<egui::Rect>,
+    /// What waits for the answer to the question about unsaved edits.
+    ask: Option<Ask>,
+}
+
+/// What would drop the config's edits and so asks first.
+#[derive(Clone)]
+enum Ask {
+    Machine(&'static sim_core::MachineEntry),
+    /// A config or machine file to open, named when the question is asked: the file field changes with a save.
+    Open(String),
+    Close,
 }
 
 /// A second run beside the machine's with one effect switched the other way, drawn as a see-through ghost.
@@ -173,12 +185,21 @@ struct WorldCamera;
 struct PathGizmos;
 
 fn main() {
-    let lang = std::env::var("SIM_APP_LANG")
-        .ok()
-        .and_then(|l| LANGUAGES.iter().copied().find(|k| *k == l))
-        .unwrap_or(LANGUAGES[0]);
+    let env = |name: &str| std::env::var(name).ok();
+    // What the last run left (`settings`): under the values the environment and the arguments give.
+    let settings_file = settings::path(env);
+    let (stored, note) = settings_file.as_deref().map(settings::load).unwrap_or_default();
+    let lang = settings::language(
+        LANGUAGES,
+        env("SIM_APP_LANG").as_deref(),
+        stored.lang.as_deref(),
+        settings::system_language(env).as_deref(),
+    );
     let mut model = Model::new(MACHINES[0], lang);
+    model.messages.extend(note);
     let args: Vec<String> = std::env::args().collect();
+    model.units = Units { rpm: stored.rpm.unwrap_or(false), mm: stored.mm.unwrap_or(false) };
+    model.set_speed(stored.speed.unwrap_or(1.0).clamp(*ui::SPEEDS.start(), *ui::SPEEDS.end()));
     // `sim-app --catalog DIR`: the catalogue from a directory instead of the compiled-in one. Before a machine file is
     // opened, which may name parts.
     if let Some(dir) = args.windows(2).find(|w| w[0] == "--catalog").map(|w| &w[1])
@@ -187,9 +208,12 @@ fn main() {
         eprintln!("{}", model.tr.tr_arg(e.key(), e.detail()));
         std::process::exit(2);
     }
-    // `sim-app --machine-file FILE` starts with a machine defined in a file (docs/machine-files.md).
+    // `sim-app --machine-file FILE` starts with a machine defined in a file (docs/machine-files.md); without it, the
+    // file or machine of the last run.
     if let Some(file) = args.windows(2).find(|w| w[0] == "--machine-file").map(|w| w[1].clone()) {
         model.open_config(&file);
+    } else {
+        restore(&mut model, &stored);
     }
     // `sim-app --set path=value`, repeatable: any config value by its dotted path, as `sim-cli --set` takes it.
     let sets: Vec<String> = args.windows(2).filter(|w| w[0] == "--set").map(|w| w[1].clone()).collect();
@@ -208,9 +232,80 @@ fn main() {
         ..default()
     };
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }));
+    // The close request is answered by `on_close_request`, which asks first where edits would be lost.
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(window),
+        close_when_requested: false,
+        ..default()
+    }));
     add_app(&mut app, model);
+    if let Some(file) = settings_file {
+        app.insert_resource(SettingsFile(file));
+    }
+    app.world_mut().resource_mut::<State>().panels.light = stored.light.unwrap_or(false);
     app.run();
+}
+
+/// Where the settings are kept: only the real app has it, so that a test or a hook never writes the user's file.
+#[derive(Resource)]
+struct SettingsFile(std::path::PathBuf);
+
+/// The file or machine the last run ended with, as the settings have it; a file that is gone is said, and the default
+/// machine stays.
+fn restore(model: &mut Model, stored: &Settings) {
+    match (&stored.config_file, stored.machine.as_deref().and_then(sim_machines::find)) {
+        (Some(file), _) if !std::path::Path::new(file).is_file() => {
+            model.messages.push(("ui-settings-file-missing", file.clone()));
+        }
+        (Some(file), _) => {
+            model.open_config(file);
+            // Said at every start, it would only be in the way; a refusal stays.
+            model.messages.retain(|(key, _)| !matches!(*key, "ui-config-opened" | "ui-machine-file-opened"));
+        }
+        (None, Some(entry)) => model.set_machine(entry),
+        (None, None) => {}
+    }
+}
+
+/// What is saved of the window's state, when it changes (`save_settings`).
+fn settings_of(state: &State) -> Settings {
+    let model = &state.model;
+    Settings {
+        lang: Some(model.lang.to_string()),
+        light: Some(state.panels.light),
+        rpm: Some(model.units.rpm),
+        mm: Some(model.units.mm),
+        speed: Some(model.speed),
+        // The file opened or saved to, not the field: a JSON machine file is reopened too, and a path typed but not
+        // opened is none.
+        config_file: Some(model.file.clone()),
+        machine: Some(model.entry.id.to_string()),
+    }
+}
+
+/// Writes the settings once they have stood still for a moment (a slider drag changes them every frame), and at the
+/// app's exit. A file that cannot be written is said once, and tried again at the next change.
+fn save_settings(
+    file: Option<Res<SettingsFile>>,
+    mut state: ResMut<State>,
+    mut exits: MessageReader<AppExit>,
+    mut seen: Local<(Option<Settings>, Option<Settings>, u32)>,
+) {
+    let exiting = exits.read().count() > 0;
+    let Some(file) = file else { return };
+    let now = settings_of(&state);
+    let (written, last, still) = &mut *seen;
+    if last.as_ref() != Some(&now) {
+        (*last, *still) = (Some(now.clone()), 0);
+    }
+    *still += 1;
+    if written.as_ref() == Some(&now) || (*still < 20 && !exiting) {
+        return;
+    }
+    *written = Some(now.clone());
+    if let Err(message) = settings::save(&file.0, &now) {
+        state.model.messages.push(message);
+    }
 }
 
 /// The app's state, panels and systems, on top of Bevy's plugins (`main`'s, or the window tests' without a screen).
@@ -244,6 +339,7 @@ fn add_app(app: &mut App, model: Model) {
             encodings: Vec::new(),
             notes: Default::default(),
             covered: Vec::new(),
+            ask: None,
         })
         .add_plugins(EguiPlugin::default())
         .init_gizmo_group::<PathGizmos>()
@@ -261,11 +357,12 @@ fn add_app(app: &mut App, model: Model) {
                 follow_tool,
                 developer_hooks,
                 record,
+                on_close_request,
             )
                 .chain(),
         )
         // After the window is closed and the exit asked for, in the same frame: the runner exits right after it.
-        .add_systems(Last, finish_videos.after(bevy::window::ExitSystems))
+        .add_systems(Last, (finish_videos, save_settings).after(bevy::window::ExitSystems))
         .add_systems(EguiPrimaryContextPass, panels);
 }
 
@@ -1210,6 +1307,7 @@ fn panels(
     mut window: Single<&mut Window, With<PrimaryWindow>>,
     tool_view: Res<ToolView>,
     mut commands: Commands,
+    mut exit: MessageWriter<AppExit>,
 ) -> Result {
     let (mut camera, camera_transform) = camera.into_inner();
     let ctx = contexts.ctx_mut()?;
@@ -1416,18 +1514,54 @@ fn panels(
         painter.galley(frame.min + egui::vec2(5.0, 3.0), galley, egui::Color32::WHITE);
     }
 
+    // Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z, where no field takes the keys (a field has its own undo).
+    if state.ask.is_none() && !ctx.text_edit_focused() {
+        let command = egui::Modifiers::COMMAND;
+        let redo = ctx.input_mut(|i| {
+            i.consume_key(command | egui::Modifiers::SHIFT, egui::Key::Z) || i.consume_key(command, egui::Key::Y)
+        });
+        if redo {
+            actions.push(Action::Redo);
+        } else if ctx.input_mut(|i| i.consume_key(command, egui::Key::Z)) {
+            actions.push(Action::Undo);
+        }
+    }
+    if let Some(ask) = &state.ask {
+        let key = match ask {
+            Ask::Machine(_) => "ui-unsaved-machine",
+            Ask::Open(_) => "ui-unsaved-open",
+            Ask::Close => "ui-unsaved-close",
+        };
+        ui::unsaved(ctx, &state.model, key, &mut actions);
+    }
+
     for action in actions {
         let model = &mut state.model;
         match action {
-            Action::Machine(entry) => {
-                model.set_machine(entry);
-                // Forget the drawn parts, so the camera frames the new machine; its scenes start anew, live.
-                state.part_ids.clear();
-                forget_run(state);
-                state.panels.part = None;
-                go_live(state);
-                // Paused, no sample arrives to show that time started again: drop the old run's scenes here.
-                state.recorded.clear();
+            Action::Machine(entry) if model.dirty() => state.ask = Some(Ask::Machine(entry)),
+            Action::Machine(entry) => switch_machine(state, entry),
+            Action::Undo => model.undo(),
+            Action::Redo => model.redo(),
+            Action::Answer(answer) => {
+                let Some(ask) = state.ask.clone() else { continue };
+                let go = match answer {
+                    ui::Answer::Cancel => {
+                        state.ask = None;
+                        false
+                    }
+                    ui::Answer::Discard => true,
+                    ui::Answer::Save => save_first(state, matches!(ask, Ask::Open(_))),
+                };
+                if go {
+                    state.ask = None;
+                    match ask {
+                        Ask::Machine(entry) => switch_machine(state, entry),
+                        Ask::Open(path) => open_file(state, &path),
+                        Ask::Close => {
+                            exit.write(AppExit::Success);
+                        }
+                    }
+                }
             }
             Action::Language(lang) => {
                 model.set_language(lang);
@@ -1535,23 +1669,21 @@ fn panels(
             Action::Loop(action) => loop_view::apply(model, action),
             Action::Inputs(inputs) => model.inputs = inputs,
             Action::RunAnalysis(kind) => model.run_analysis(kind),
+            Action::Cancel(job) => model.cancel_job(job),
             Action::ApplyOptimised => model.apply_optimised(),
             Action::UseCandidate(row) => model.use_candidate(row),
             Action::RunView(kind) => model.views.start(kind, model.entry, &model.config, &model.inputs),
             Action::OpenConfig(dialog) => {
-                if let Some(path) = config_path(model, dialog, false) {
-                    model.open_config(&path);
-                    // Forget the drawn parts, so the camera frames the machine as the file sets it up (another machine,
-                    // where the file is of one).
-                    state.part_ids.clear();
-                    state.panels.part = None;
-                    forget_run(state);
-                    go_live(state);
-                    state.recorded.clear();
+                if let Some(path) = config_path(model, dialog, false, &model.inputs.config_file) {
+                    if model.dirty() {
+                        state.ask = Some(Ask::Open(path));
+                    } else {
+                        open_file(state, &path);
+                    }
                 }
             }
             Action::SaveConfig(dialog) => {
-                if let Some(path) = config_path(model, dialog, true) {
+                if let Some(path) = config_path(model, dialog, true, &model.inputs.config_file) {
                     model.save_config(&path);
                 }
             }
@@ -1573,6 +1705,67 @@ fn panels(
         }
     }
     Ok(())
+}
+
+/// The machine `entry` in place of the one shown, with its default config.
+fn switch_machine(state: &mut State, entry: &'static sim_core::MachineEntry) {
+    state.model.set_machine(entry);
+    // Forget the drawn parts, so the camera frames the new machine; its scenes start anew, live.
+    state.part_ids.clear();
+    forget_run(state);
+    state.panels.part = None;
+    go_live(state);
+    // Paused, no sample arrives to show that time started again: drop the old run's scenes here.
+    state.recorded.clear();
+}
+
+/// Opens the config or machine file `path`, forgetting the drawn parts so that the camera frames the machine as the
+/// file sets it up (another machine, where the file is of one).
+fn open_file(state: &mut State, path: &str) {
+    state.model.open_config(path);
+    state.part_ids.clear();
+    state.panels.part = None;
+    forget_run(state);
+    go_live(state);
+    state.recorded.clear();
+}
+
+/// The config goes to the file the field names, or to one the dialog is asked for where the field is empty, before
+/// what would drop it goes on. With `opening` the field holds the file about to be opened, so the config goes to the
+/// file it was last opened from or saved to instead (the dialog where there is none, or a JSON file). Whether it
+/// does: not when the dialog is cancelled (the question stays), nor when the file cannot be written (the question
+/// goes, with the reason among the messages).
+fn save_first(state: &mut State, opening: bool) -> bool {
+    let model = &mut state.model;
+    let target = if opening { model.save_target() } else { Some(model.inputs.config_file.clone()) };
+    // Opening, the field names the file about to be opened: the dialog does not start there.
+    let start = if opening { model.save_suggestion() } else { model.inputs.config_file.clone() };
+    let Some(path) = target.filter(|t| !t.is_empty()).or_else(|| config_path(model, true, true, &start)) else {
+        return false;
+    };
+    model.save_config(&path);
+    if !model.dirty() {
+        return true;
+    }
+    state.ask = None;
+    false
+}
+
+/// The window's close button: the app ends, unless the config has edits that no file has; then that is asked first.
+/// (The window is not closed by the request itself: `main` turns that off.)
+fn on_close_request(
+    mut requests: MessageReader<bevy::window::WindowCloseRequested>,
+    mut state: ResMut<State>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if requests.read().count() == 0 {
+        return;
+    }
+    if state.model.dirty() {
+        state.ask = Some(Ask::Close);
+    } else {
+        exit.write(AppExit::Success);
+    }
 }
 
 /// Moves the timeline, within what was recorded. Leaving the newest scene pauses the simulation, so that the
@@ -1691,10 +1884,10 @@ fn save_path(kind: &str, extension: &str, name: &str) -> Option<std::path::PathB
     rfd::FileDialog::new().add_filter(kind, &[extension]).set_file_name(name).save_file()
 }
 
-/// The file the config file field names, or with `dialog` the one the system's file dialog is given (starting
-/// where the field points); `None` where it is cancelled. The dialog holds up the window until it is closed.
-fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
-    let typed = std::path::Path::new(&model.inputs.config_file);
+/// The file the config file field names, or with `dialog` the one the system's file dialog is given (starting at
+/// `start`, usually the field); `None` where it is cancelled. The dialog holds up the window until it is closed.
+fn config_path(model: &Model, dialog: bool, save: bool, start: &str) -> Option<String> {
+    let typed = std::path::Path::new(start);
     if !dialog {
         return Some(model.inputs.config_file.clone());
     }

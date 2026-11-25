@@ -7,7 +7,119 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-11-22
+## [1.1.0] - 2026-11-25
+
+### Reliability, usability, functions and speed (23 to 25 November)
+
+The audit of 23 November and the work it asked for; each item was reviewed by experiment (a test that fails without
+it). The physics audit of 21 and 22 November follows below it.
+
+### Changed
+
+- `sim-cli` exits with 1 when a judged row fails (`verdicts`, also with `--bands` and `--worst`, `margins`, `stop`,
+  `accuracy`, `report`); 0 when all pass; 2 stays for usage and config errors. The table is printed in full first.
+  Scripts that read the exit code of these commands as "ran through" must accept 1: the overhead crane's shipped
+  config fails one check (its input shaper is off by default), and a worst case that fails under `--bands` counts.
+- The MCP server refuses a config value that names a file (a key ending in `_file`, such as `arm.urdf_file` or a cam's
+  `table_file`) unless it is empty, the machine's built-in value, or a file of at most 5 MB inside the folder the
+  operator names in `KINEMATICS_SIM_MCP_IN_DIR`; the refusal does not tell whether the file exists. TOML text the
+  server's own parser cannot read is refused before the core reads it; on Python 3.10, which has no TOML parser of
+  its own, any TOML text that holds `_file` or an escape is refused.
+- The optimiser's refusal of a cycle that fails as configured has a message of its own ("The cycle as configured
+  already fails: ..."), no longer "Configuration value is out of range", and names the failing checks by their labels,
+  each once (a linear motor's speed in m/s), in the app and at the command line.
+- The web page's plain wheel scrolls the page; Ctrl + wheel (or a trackpad pinch) zooms the 3D view and the plots. On
+  touch a vertical swipe scrolls past the view.
+- The app's window title is "Kinematics Simulation"; its speed slider goes up to 10.
+- The steps of the T-gantry (its default cycle 38 % faster), the spatial cable robot (18 to 36 %) and the rotary
+  hexapod (6 %) are cheaper: no heap allocations in their derivatives and forward kinematics, the cranks' terms worked
+  out once per call. Every output is unchanged.
+- `drive.notch_frequency_hz = 0` is no notch for that motor (`effects.notch_filter` stays machine-wide).
+- CI: the long sweeps of the loops' margins across the bounds run weekly and by hand, no longer on a push to main
+  (since the margins are measured at every pose of the cycle they take hours), in fifteen groups of up to 6 hours.
+
+### Added
+
+- A result that is not finite (an unstable loop, or a winding that heats without end) is named: `sim-cli` says so on
+  the error stream after `verdicts`, `stop` and `accuracy`, with a pointer to `sim-cli margins`; the app says it once
+  per analysis.
+- `sim-cli --version` and `-V`; `sim-cli help`, `help COMMAND` and `COMMAND --help` (one command to a line, a command's
+  options, the topics `options`, `paths`, `units`); a usage error names the command's help in one line.
+- Config errors at the command line name the nearest key of a misspelt one and show the value that is out of range,
+  with the limit it broke wherever a shared reader refused it (above 0, not negative, finite and at most 1e15), in the
+  machine, the drive model and the analyses; a check made elsewhere shows the value, a machine file's node path
+  neither.
+- Long analyses can be watched and stopped: `Progress`, `with_progress` and `Cancelled` in `sim_components::analysis`
+  (every batch of runs counts into the job and stops taking runs once it is cancelled; a run already started is
+  finished), `Job` and `Cancelled` in the Python module, a progress bar and a Cancel button for the app's long
+  computations (checks with bands, sensitivity, optimiser, tuning, report, band traces, motor search, kinematics
+  comparison). Switching the machine or opening another file stops the jobs under way.
+- MCP server: a call given up at its timeout or cancelled by the client stops computing; its progress notices carry
+  the time used of the timeout and the runs done of those planned; a panic of the core is an error of the tool, not
+  the end of the server; at most 32 sessions (the least recently used is dropped) and limits on `runs`, `points` and
+  `repeats`; `loop_margins` takes `top` and orders its rows worst first.
+- App: messages at the top of the left panel on every tab; undo and redo of config edits (Ctrl+Z, Ctrl+Y), a
+  "modified" mark and a Save / Discard / Cancel question before a machine switch or closing the window drops edits;
+  language, theme, units, speed and the last config file are remembered between starts (`settings.toml` in the
+  user's config folder, `SIM_APP_SETTINGS` for another file); the Parameters tab has a filter, the config path on
+  hover, a list of the values changed from the default and catalogue drop-downs for motor, supply, gearbox, drive,
+  axis and belt. Opening a config or machine file over unsaved edits asks first too; its Save writes the file the
+  config was last opened from or saved to (the file dialog where there is none or it was a JSON machine file), never
+  the one being opened. A JSON machine file is reopened at the next start.
+- Web page: Shift + drag or a right or middle drag pans, a double click or "Fit" fits the view again, "+" and "−"
+  zoom; on touch a sideways swipe turns the machine, and two fingers pinch, pan sideways and tilt (their vertical
+  movement) without scrolling the page.
+- `sim-cli tune MACHINE [--phase-margin DEG] [--gain-margin DB] [--no-notch]` (`sim_components::tune::velocity_loops`):
+  each motor's largest velocity gain that keeps the least phase and gain margin over the cycle's poses at 35 degrees
+  and 6 dB, the position gain with it, and a notch on a machine mode that holds the gain back; the margins before and
+  after, ready-to-paste `--set` words, exit code 1 where the targets are not met; it can be watched and stopped as
+  the other analyses. It looks at the poses, not across the bounds: `margins --bands` afterwards (the single axis's
+  and the rotary knife's shipped gains are lower than `tune`'s because they hold over their bounds).
+- `sim-cli parameters MACHINE [--family s120|s210]`: for each motor the SINAMICS S120 servo or S210 parameter that
+  takes each drive setting (number, name, unit, the value converted), each marked as printed in a Siemens document,
+  derived, or without a parameter; tables `siemens/parameters_s120.csv` and `parameters_s210.csv` with their pages.
+  An aid for commissioning, to be checked against the drive's firmware.
+- A twin can be judged: `sim-cli replay --tolerance NAME=LIMIT,...` (RMS and peak limits per signal) and `sim-cli fit
+  --within N` (each fitted value at most N standard errors from the config) say `ok` or `FAIL` with exit code 1;
+  `sim-cli fit --write FILE [--sigmas K]` writes the fitted belt stiffness and its K-sigma band (`[bounds]`) into a
+  config. Lumped values (the moved mass, friction, the payload factor) are named and not written: no single key holds
+  them. The written file keeps neither comments nor key order.
+- `sim-cli search --prices FILE`: the user's own price list (`part_number,price`, in one currency of the user's
+  choice; no vendor publishes prices) adds a `price` column, ranks by it, and names the part numbers it lacks; a
+  candidate's price counts every motor's own parts, the axis by its screw and carriages; `--rank-by price`, also in
+  mixes. The app and the Python module refuse a ranking by price (they take no price list yet).
+- Drive derating: `ratings.drive_ambient_c`, `ratings.drive_altitude_m` and `ratings.drive_pulse_frequency_hz` derate
+  the rated and base-load current of an S210 converter (Table 12-9 of its operating instructions) and of an S120
+  Motor Module (altitude, ambient and pulse frequency multiplied, this simulator's assumption on the safe side; Siemens
+  does not say how they combine). The maximum current is not derated (Siemens does not say). A condition beyond the
+  documents' range, for another maker's drive or without a catalogue drive is refused; the search marks a derated
+  drive as estimated. Tables `siemens/derating_s210.csv` and `derating_s120.csv`.
+- G-code: `G4 P` dwell, `G61`, `G64`, `G64 P` (P0 = G64), and `profile.feed_override` (above 0, at most 2) on the
+  programmed feed of G1, G2, G3 and of RAPID and KRL moves (not G0, never above the axes' limits); a change of mode
+  stops at its corner. Where this differs from LinuxCNC is in the user guide.
+- Verdict `self-collision`: the machine's own parts against each other in the run and in the plan, against
+  `profile.min_clearance_m`. Parts in contact at the start pose count as joined (an arm's links by their order); a
+  time-optimal path that brings two parts that close is refused; a machine with fewer than two parts says "not
+  checked". On the H4 delta two neighbouring rods start within the clearance and are therefore not compared
+  (`docs/model-reference.md`).
+- Catalogue: Bosch Rexroth BSHP ball runner blocks (61 rows, C for 100 km as printed) and THK SHS and HSR guides (59
+  rows), named as guide sets (`FNS25x4`, `SHS25Cx4`) and offered by the guide search; Festo ELGA-TB-KF-F1, -RF and
+  -RF-F1 (`belt_axes_elga.csv` 16 rows) with the travel their loads are stated for, an RF slide screened on Festo's
+  5000 km basis.
+- `--set` (and the app, the Python module, the OPC UA server and the web page) adds a key a config file may have where
+  this one has none: a motor's own `[drive.<id>]` value, ratings, the installation conditions, the feed override; a
+  misspelt key is still refused with the nearest one.
+
+### Fixed
+
+- `--catalog DIR` refuses a table with a missing column or a short row, naming the file and the column or line; such
+  a table made the program panic later. A blank line in a table is passed over.
+- A machine file loaded again (a Python sweep, an FMU made in a loop, the CLI's second load) is the same entry; each
+  load leaked an entry before.
+- MCP server: `loop_margins` could cut off its worst row at the cap of 25.
+- The dataset report's "Apart" table was empty since the fit table gained its units column.
+- The S120's balancing of the speed precontrol is p2536, not p1429 (configs, docs); its ramps p1121 and p1135 run
+  from the maximum speed p1082.
 
 ### Physics audit (21 and 22 November)
 

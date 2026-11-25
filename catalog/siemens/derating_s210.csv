@@ -1,0 +1,14 @@
+part_number,quantity,altitude_m,ambient_c,pulse_frequency_hz,output_current_factor,basis
+,altitude_ambient,1000,40,,1,inferred
+,altitude_ambient,1000,45,,1,inferred
+,altitude_ambient,1000,50,,1,inferred
+,altitude_ambient,2000,40,,1,table
+,altitude_ambient,2000,45,,1,inferred
+,altitude_ambient,2000,50,,0.9,table
+,altitude_ambient,3000,40,,1,table
+,altitude_ambient,3000,45,,0.9,table
+,altitude_ambient,3000,50,,0.8,table
+,altitude_ambient,4000,40,,0.9,table
+,altitude_ambient,4000,45,,0.8,table
+,altitude_ambient,4000,50,,0.7,table
+,pulse_frequency,,,8000,1,fixed
