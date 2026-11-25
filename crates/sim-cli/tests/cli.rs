@@ -133,7 +133,23 @@ fn config_errors_say_what_was_meant() {
     );
     let low = cli(&["verdicts", entry.id, "--set", &format!("{key}=-5.5")]);
     assert_eq!(low.status.code(), Some(2));
-    assert_eq!(text(&low.stderr).trim(), format!("Configuration value is out of range: {key} = -5.5"));
+    // The payload is read by `non_negative`; a mass by `positive`; the substeps count is checked by the simulator itself
+    // (a whole number of at most 1000), which keeps the plain value: what each reader refused is said, no more.
+    assert_eq!(
+        text(&low.stderr).trim(),
+        format!("Configuration value is out of range: {key} = -5.5 (must not be negative)")
+    );
+    let (mass, substeps) = ("mass.carriage_kg", "sim.substeps");
+    assert!(entry.config().get(mass).is_ok() && entry.config().get(substeps).is_ok());
+    let light = cli(&["verdicts", entry.id, "--set", &format!("{mass}=-5.5")]);
+    assert_eq!(
+        text(&light.stderr).trim(),
+        format!("Configuration value is out of range: {mass} = -5.5 (must be above 0)")
+    );
+    let many = cli(&["verdicts", entry.id, "--set", &format!("{substeps}=5000")]);
+    assert_eq!(text(&many.stderr).trim(), format!("Configuration value is out of range: {substeps} = 5000"));
+    let german_low = cli(&["verdicts", entry.id, "--set", &format!("{mass}=-5.5"), "--lang", "de"]);
+    assert!(text(&german_low.stderr).contains("(muss größer als 0 sein)"), "{}", text(&german_low.stderr));
     let german = cli(&["verdicts", entry.id, "--set", &format!("{typo}=3"), "--lang", "de"]);
     assert!(text(&german.stderr).contains(&format!("(meinten Sie {key}?)")), "{}", text(&german.stderr));
 }

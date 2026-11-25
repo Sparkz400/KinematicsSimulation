@@ -12,7 +12,7 @@ use sim_components::motor_fit::{
 };
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv};
 use sim_components::{Command, Sim};
-use sim_core::{Config, ConfigError, ConfigHint, MachineEntry, Translations};
+use sim_core::{Bound, Config, ConfigError, ConfigHint, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -189,9 +189,23 @@ fn config_help(args: &Args, tr: &Translations, key: &str, arg: &str) -> String {
         // The refused one is what the error is about.
         let _ = cfg.set_text(assignment);
     }
+    // The failure carries key and path only; building the machine again from the same config finds the refusal with
+    // the limit it broke, where the machine's own readers refused it (a check made elsewhere keeps the plain value).
+    let error = match (entry.build)(&cfg) {
+        Err(again @ ConfigError::Bounded(..)) if again.detail() == arg => again,
+        _ => error,
+    };
     match cfg.hint(&error) {
         Some(ConfigHint::Nearest(path)) => format!(" {}", tr.tr_arg("cli-hint-nearest", &path)),
         Some(ConfigHint::Value(value)) => format!(" {}", tr.tr_arg("cli-hint-value", &value)),
+        Some(ConfigHint::Bounded(value, bound)) => {
+            let key = match bound {
+                Bound::Positive => "cli-hint-positive",
+                Bound::NonNegative => "cli-hint-non-negative",
+                Bound::Number => "cli-hint-number",
+            };
+            format!(" {}", tr.tr_arg(key, &value))
+        }
         None => String::new(),
     }
 }

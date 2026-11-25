@@ -4,14 +4,28 @@ use toml::{Table, Value};
 
 pub const FORMAT_VERSION: i64 = 1;
 
+/// The limit that the shared readers (`Config::positive`, `non_negative`, `f64`) refused a value for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bound {
+    /// Above zero (`positive`).
+    Positive,
+    /// Zero or above (`non_negative`).
+    NonNegative,
+    /// Not a finite number of at most 1e15 in size (`number`).
+    Number,
+}
+
 /// Carries a translation key and a detail (usually the config path), never display text.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum ConfigError {
     Parse(String),
     Version(String),
     Missing(String),
     Type(String),
     Invalid(String),
+    /// `Invalid` at a path, with the limit it broke where a shared reader knows it: the same key and detail as
+    /// `Invalid` (and equal to it), so that a front end that does not look at the limit shows what it always did.
+    Bounded(Bound, String),
     /// A key that the machine's default config does not have.
     Unknown(String),
     /// A value refused for a reason with a message of its own: the translation key, and the value's name (a part name
@@ -26,7 +40,7 @@ impl ConfigError {
             Self::Version(_) => "error-config-version",
             Self::Missing(_) => "error-config-missing",
             Self::Type(_) => "error-config-type",
-            Self::Invalid(_) => "error-config-invalid",
+            Self::Invalid(_) | Self::Bounded(..) => "error-config-invalid",
             Self::Unknown(_) => "error-config-unknown",
             Self::Part(key, _) => key,
         }
@@ -38,9 +52,17 @@ impl ConfigError {
             | Self::Missing(d)
             | Self::Type(d)
             | Self::Invalid(d)
+            | Self::Bounded(_, d)
             | Self::Unknown(d)
             | Self::Part(_, d) => d,
         }
+    }
+}
+
+/// Errors are equal when key and detail are: what every test and front end goes by, so `Bounded` equals `Invalid`.
+impl PartialEq for ConfigError {
+    fn eq(&self, other: &Self) -> bool {
+        (self.key(), self.detail()) == (other.key(), other.detail())
     }
 }
 
@@ -51,6 +73,8 @@ pub enum ConfigHint {
     Nearest(String),
     /// The value (in TOML syntax) at the path that was refused.
     Value(String),
+    /// The value that was refused, and the limit it broke.
+    Bounded(String, Bound),
 }
 
 /// The Levenshtein distance of two strings, in characters.
@@ -100,13 +124,13 @@ impl Config {
     /// A value that may be zero but not negative (dampings, frictions, a payload).
     pub fn non_negative(&self, path: &str) -> Result<f64> {
         let v = self.f64(path)?;
-        if v >= 0.0 { Ok(v) } else { Err(ConfigError::Invalid(path.into())) }
+        if v >= 0.0 { Ok(v) } else { Err(ConfigError::Bounded(Bound::NonNegative, path.into())) }
     }
 
     /// A value that must be strictly positive (masses, radii, stiffnesses, cycle times).
     pub fn positive(&self, path: &str) -> Result<f64> {
         let v = self.f64(path)?;
-        if v > 0.0 && v.is_finite() { Ok(v) } else { Err(ConfigError::Invalid(path.into())) }
+        if v > 0.0 && v.is_finite() { Ok(v) } else { Err(ConfigError::Bounded(Bound::Positive, path.into())) }
     }
 
     pub fn bool(&self, path: &str) -> Result<bool> {
@@ -196,6 +220,9 @@ impl Config {
                 let (distance, nearest) = paths.map(|p| (edit_distance(path, &p), p)).min_by_key(|(d, _)| *d)?;
                 (distance > 0 && distance <= near).then_some(ConfigHint::Nearest(nearest))
             }
+            ConfigError::Bounded(bound, path) => {
+                self.get(path).ok().map(|value| ConfigHint::Bounded(value.to_string(), *bound))
+            }
             ConfigError::Invalid(path) | ConfigError::Type(path) => {
                 self.get(path).ok().map(|value| ConfigHint::Value(value.to_string()))
             }
@@ -236,7 +263,7 @@ pub fn number(value: f64, path: &str) -> Result<f64> {
     } else if value.abs() <= LARGEST {
         Ok(value)
     } else {
-        Err(ConfigError::Invalid(path.into()))
+        Err(ConfigError::Bounded(Bound::Number, path.into()))
     }
 }
 
@@ -268,6 +295,23 @@ mod tests {
         assert_eq!(c.hint(&ConfigError::Invalid("a.nowhere".into())), None);
         assert_eq!(c.hint(&ConfigError::Parse("x".into())), None);
         assert_eq!(edit_distance("kitten", "sitting"), 3);
+    }
+
+    /// A value refused by a shared reader is shown with the limit it broke (`positive`: above zero, `non_negative`: not
+    /// below zero, `f64`: size), under the same key and detail as any `Invalid`; a site that checks for itself
+    /// (`Invalid`) is shown with its value only.
+    #[test]
+    fn hints_name_the_limit_a_shared_reader_refused() {
+        let c = Config::parse("format_version = 1\nzero = 0.0\nneg = -5.5\nbig = 1e20\n").unwrap();
+        let hint = |e: Result<f64>| c.hint(&e.unwrap_err());
+        assert_eq!(hint(c.positive("neg")), Some(ConfigHint::Bounded("-5.5".into(), Bound::Positive)));
+        assert_eq!(hint(c.positive("zero")), Some(ConfigHint::Bounded("0.0".into(), Bound::Positive)));
+        assert_eq!(hint(c.non_negative("neg")), Some(ConfigHint::Bounded("-5.5".into(), Bound::NonNegative)));
+        assert!(matches!(hint(c.f64("big")), Some(ConfigHint::Bounded(_, Bound::Number))));
+        let refused = c.positive("neg").unwrap_err();
+        assert_eq!((refused.key(), refused.detail()), ("error-config-invalid", "neg"));
+        assert_eq!(refused, ConfigError::Invalid("neg".into()));
+        assert_eq!(c.hint(&ConfigError::Invalid("neg".into())), Some(ConfigHint::Value("-5.5".into())));
     }
 
     #[test]

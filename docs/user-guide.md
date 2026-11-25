@@ -51,7 +51,7 @@ sim-cli COMMAND MACHINE [options]
 
 Rules that are easy to trip over:
 
-- `--set` only changes values that exist. A misspelt key is refused and the nearest key is named where one is close (`Configuration value is missing: mass.cariage_kg (did you mean mass.carriage_kg?)`), and so is a value of the wrong type. A value out of range is shown with its path and value (`Configuration value is out of range: mass.payload_kg = -5`).
+- `--set` only changes values that exist. A misspelt key is refused and the nearest key is named where one is close (`Configuration value is missing: mass.cariage_kg (did you mean mass.carriage_kg?)`), and so is a value of the wrong type. A value out of range is shown with its path and value, and with the limit where a mass, radius, stiffness, damping, payload or other shared reading of the config refused it (`Configuration value is out of range: mass.payload_kg = -5 (must not be negative)`, or `(must be above 0)`, or the finite-number limit of at most 1e15); a check made elsewhere shows the value only.
 - `--motor`, `--supply` and `--gearbox` need a `[parts]` table in the config. All three shipped configs have one.
 - Every option except `--cycle`, `--time-optimal`, `--bands` and `--worst` takes a value. An option without its value is refused (`This option needs a value: --time`), and so is an option the command does not know, such as a misspelt one (`This command has no such option: --cylce`). A number has to be finite: `--time inf` is refused.
 - `--cycle`, `--move`, `--trajectory` and `--path` exclude each other (`Only one of these options can be given at a time: --cycle --move`).

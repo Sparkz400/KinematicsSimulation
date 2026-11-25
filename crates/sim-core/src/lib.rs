@@ -7,7 +7,7 @@ pub mod machine;
 pub mod scene;
 pub mod testkit;
 
-pub use config::{Config, ConfigError, ConfigHint};
+pub use config::{Bound, Config, ConfigError, ConfigHint};
 pub use i18n::Translations;
 pub use integrate::{MOST_CUTS, Rk4, advance, advance_refined};
 pub use machine::{

@@ -45,6 +45,9 @@ cli-sensitivity-runs = Für die globale Empfindlichkeit simulierte Zyklen: { $ar
 cli-measure-first = Diese zuerst messen: { $arg }
 cli-hint-nearest = (meinten Sie { $arg }?)
 cli-hint-value = = { $arg }
+cli-hint-positive = = { $arg } (muss größer als 0 sein)
+cli-hint-non-negative = = { $arg } (darf nicht negativ sein)
+cli-hint-number = = { $arg } (muss eine endliche Zahl vom Betrag höchstens 1e15 sein)
 
 cli-usage-hint = Falsche oder fehlende Argumente. `sim-cli help { $arg }` nennt die Optionen dieses Befehls; `sim-cli help` nennt die Befehle.
 cli-usage-unknown = Unbekannter Befehl oder Hilfethema: { $arg }. `sim-cli help` nennt die Befehle.

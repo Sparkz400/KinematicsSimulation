@@ -45,6 +45,9 @@ cli-sensitivity-runs = Cycles simulated for the global sensitivity: { $arg }
 cli-measure-first = Measure these first: { $arg }
 cli-hint-nearest = (did you mean { $arg }?)
 cli-hint-value = = { $arg }
+cli-hint-positive = = { $arg } (must be above 0)
+cli-hint-non-negative = = { $arg } (must not be negative)
+cli-hint-number = = { $arg } (must be a finite number of at most 1e15 in size)
 
 cli-usage-hint = Wrong or missing arguments. `sim-cli help { $arg }` lists the options of this command; `sim-cli help` lists the commands.
 cli-usage-unknown = Unknown command or help topic: { $arg }. `sim-cli help` lists the commands.
