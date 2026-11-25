@@ -109,7 +109,7 @@ fn the_z_axis_acceleration_drives_the_beam_through_its_mass() {
         lossless_config(),
         &["effects.beam_vertical_mode = true", "effects.frame_compliance = false", "effects.tool_flex = false"],
     );
-    assert_eq!(m.coordinates(), vec![X, Z, W]);
+    assert_eq!(m.coordinates()[..], [X, Z, W]);
     let mass = m.elastic_mass(0.5, 0.25);
     // The belt's vertical runs (0.16 kg) ride on z' - w' as the Z axis; a third of the tilting horizontal ones on w.
     assert!((mass[5] + 7.16).abs() < 1e-12 && (mass[7] + 7.16).abs() < 1e-12, "{mass:?}");
