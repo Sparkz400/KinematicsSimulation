@@ -74,8 +74,9 @@ impl Monitor {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub reaction: Reaction,
-    /// The ramps' decelerations, rad/s^2: the rated speed over `drive.off1_ramp_s` and `off3_ramp_s`, as p1121 and
-    /// p1135 are times from the reference speed (here the rated speed) to standstill.
+    /// The ramps' decelerations, rad/s^2: the rated speed over `drive.off1_ramp_s` and `off3_ramp_s`, the times from the
+    /// rated speed to standstill. The drive's p1121 and p1135 count from its maximum speed p1082 instead (S120 List
+    /// Manual p. 528, 530): p1121 = `off1_ramp_s` x p1082 / rated speed, as `sim-cli parameters` converts it.
     pub off1_deceleration: f64,
     pub off3_deceleration: f64,
     /// Once its ramp is down, a drive takes its pulses off below this speed (p1226).

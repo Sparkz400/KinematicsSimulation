@@ -204,14 +204,14 @@ fn config_help(args: &Args, tr: &Translations, key: &str, arg: &str) -> String {
     };
     for assignment in args.options("--set") {
         // The refused one is what the error is about.
-        let _ = cfg.set_text(assignment);
+        let _ = sim_components::set_config_text(entry, &mut cfg, assignment);
     }
     // With the limit it broke where a shared reader refused it (a check made elsewhere keeps the plain value).
     let error = match BOUNDED.lock().unwrap_or_else(|p| p.into_inner()).take() {
         Some((bound, path)) if key == "error-config-invalid" && path == arg => ConfigError::Bounded(bound, path),
         _ => error,
     };
-    match cfg.hint(&error) {
+    match sim_components::config_hint(entry, &cfg, &error) {
         Some(ConfigHint::Nearest(path)) => format!(" {}", tr.tr_arg("cli-hint-nearest", &path)),
         Some(ConfigHint::Value(value)) => format!(" {}", tr.tr_arg("cli-hint-value", &value)),
         Some(ConfigHint::Bounded(value, bound)) => {
@@ -317,6 +317,7 @@ fn command_options(command: Option<&str>) -> &'static [&'static str] {
         ],
         Some("compare") => &["--effect", "--signal", "--differences"],
         Some("fmu") => &["--binary", "--fmi"],
+        Some("parameters") => &["--family"],
         Some("report") => &["--bands"],
         _ => &[],
     }
@@ -361,6 +362,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("check-dataset") => check_dataset(args, tr),
         Some("compare") => compare(args),
         Some("fmu") => fmu(args),
+        Some("parameters") => parameters(args, tr),
         Some("report") => report(args, tr),
         Some("stop") => stop(args, tr),
         Some("accuracy") => accuracy(args, tr),
@@ -385,13 +387,26 @@ fn machine(args: &Args) -> Result<&'static MachineEntry, Failure> {
 /// parts it names or `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` and `--axis` name put in from the catalogue, then every
 /// `--set path=value` applied on top.
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
-    let (entry, cfg) = named_config(args)?;
+    let (entry, mut cfg) = named_config(args)?;
+    before_parts(args, entry, &mut cfg)?;
     // Parts by name from the catalogue, here and not only in the simulator, so that single values can be set on top.
     let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
     for assignment in args.options("--set") {
-        cfg.set_text(assignment)?;
+        sim_components::set_config_text(entry, &mut cfg, assignment)?;
     }
     Ok((entry, cfg))
+}
+
+/// The `--set` assignments of a drive's installation conditions, which are read where its part is put in (it is derated
+/// there): set before the parts are resolved, as the others are after.
+fn before_parts(args: &Args, entry: &MachineEntry, cfg: &mut Config) -> Result<(), Failure> {
+    for assignment in args.options("--set") {
+        let path = assignment.split('=').next().unwrap_or("").trim();
+        if sim_components::catalog::DRIVE_CONDITION_KEYS.contains(&path) {
+            sim_components::set_config_text(entry, cfg, assignment)?;
+        }
+    }
+    Ok(())
 }
 
 /// The machine and its config with the parts the command line names in `[parts]`, before they are resolved.
@@ -678,6 +693,7 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
 struct FitRow {
     quantity: String,
     of: String,
+    config: f64,
     fitted: f64,
     error: f64,
 }
@@ -713,8 +729,8 @@ impl FitTable<'_> {
     }
 
     fn note(&mut self, quantity: &str, of: &str, values: Option<[f64; 3]>) {
-        if let Some([_, fitted, error]) = values {
-            self.rows.push(FitRow { quantity: quantity.into(), of: of.into(), fitted, error });
+        if let Some([config, fitted, error]) = values {
+            self.rows.push(FitRow { quantity: quantity.into(), of: of.into(), config, fitted, error });
         }
     }
 }
@@ -836,18 +852,20 @@ fn fit_rows(
     Ok((advice, result, table.rows))
 }
 
-/// `fit --write FILE`: the config as the command line gives it, with each fitted quantity that is one key of it set to
-/// the fitted value and a `[bounds]` entry of `sigmas` standard errors either side of it. Only the factor on a
+/// `fit --write FILE`: the config as the command line gives it, with each fitted quantity that is exactly one key of it
+/// set to the fitted value and a `[bounds]` entry of `sigmas` standard errors either side of it. Only the factor on a
 /// stiffness (`--stiffness`) is one key; every other quantity of the table is the trace's value of what several keys
 /// make up (the moved mass of an axis, a friction that the motor, gearbox and guide share) or of none, and is named on
-/// the error stream with the reason, as is a key the file cannot take. Comments of the written file are not kept
-/// (`Config::to_text`).
+/// the error stream with the reason, as is a key the file cannot take. The payload's factor of a joint fit is not
+/// written either: on a cycle that picks and places, the trace holds the payload part of the time, and the factor is a
+/// share of that time as much as of the mass (the delta's cycle with 4 kg against its 3 kg came out at 0.72 times the
+/// config's). Comments of the written file are not kept and its keys come in alphabetical order (`Config::to_text`).
 fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas: f64) -> Result<(), Failure> {
     let (entry, resolved) = machine_and_config(args)?;
     // What the file holds: the config before the parts it names are put in, so that those stay named.
     let (_, mut file) = named_config(args)?;
     for assignment in args.options("--set") {
-        file.set_text(assignment)?;
+        sim_components::set_config_text(entry, &mut file, assignment)?;
     }
     let mut written = Vec::new();
     for row in rows {
@@ -856,7 +874,9 @@ fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas
             eprintln!("{}", tr.tr_arg("cli-fit-write-lumped", &name));
             continue;
         }
-        match fitted_band(entry, &file, &resolved, row, sigmas) {
+        // The factor and its error relative to the config's own, which is 1.
+        let (factor, error) = (row.fitted / row.config, row.error / row.config.abs());
+        match fitted_band(entry, &file, &resolved, &row.of, factor, error, sigmas) {
             Ok(band) => written.push((row.of.clone(), band)),
             Err(reason) => eprintln!("{}", tr.tr_arg(reason, &name)),
         }
@@ -866,17 +886,11 @@ fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas
     }
     for (key, [value, low, high]) in &written {
         sim_components::analysis::set_bounded(&mut file, key, *value)?;
-        // `Config::set` changes a key and never adds one: a bound the file has not got yet is added to its text below.
-        if file.get(&format!("bounds.{key}")).is_ok() {
-            file.set_text(&format!("bounds.{key} = [{low:?}, {high:?}]"))?;
-        }
+        let bound = format!("bounds.{key}");
+        // A bound the file has not got yet is added.
+        file.set_text_within(&format!("{bound} = [{low:?}, {high:?}]"), &file.clone(), &[bound.as_str()])?;
     }
-    let mut text = file.to_text()?;
-    for (key, [_, low, high]) in &written {
-        if file.get(&format!("bounds.{key}")).is_err() {
-            text = with_bound(&text, key, *low, *high);
-        }
-    }
+    let text = file.to_text()?;
     // What is written has to load again, with its bounds read.
     let loaded = sim_components::load_config(entry, &text)?;
     sim_components::analysis::bounds(&loaded)?;
@@ -885,18 +899,20 @@ fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas
     Ok(())
 }
 
-/// The value of the key a stiffness factor was fitted on and its band `[low, high]`, or the translation key of why it is
-/// not written: the file has no such key (`cli-fit-write-no-key`), a named part sets it (the file's value is not the
-/// one the fit used: `cli-fit-write-by-part`), or the fitted value or its error is not usable (`cli-fit-write-refused`).
-/// A value or bound the machine's readers refuse (a stiffness at or below 0) is pulled in to the nearest one they take.
+/// The value `factor` times that of `key` and its band `[low, high]` of `sigmas` times `error` (relative) either side,
+/// or the translation key of why it is not written: the file has no such key (`cli-fit-write-no-key`), a named part
+/// sets it (the file's value is not the one the fit used: `cli-fit-write-by-part`), or the fitted value or its error is
+/// not usable (`cli-fit-write-refused`). A value or bound the machine's readers refuse (a stiffness at or below 0) is
+/// pulled in to the nearest one they take.
 fn fitted_band(
     entry: &'static MachineEntry,
     file: &Config,
     resolved: &Config,
-    row: &FitRow,
+    key: &str,
+    factor: f64,
+    error: f64,
     sigmas: f64,
 ) -> Result<[f64; 3], &'static str> {
-    let key = row.of.as_str();
     let (Ok(base), Ok(own)) = (resolved.f64(key), file.f64(key)) else { return Err("cli-fit-write-no-key") };
     if (own - base).abs() > 1e-9 * base.abs() {
         return Err("cli-fit-write-by-part");
@@ -906,8 +922,8 @@ fn fitted_band(
         sim_components::analysis::set_bounded(&mut at, key, v).is_ok()
             && sim_components::catalog::resolve(entry, &at).and_then(|r| (entry.build)(&r)).is_ok()
     };
-    let value = base * row.fitted;
-    if !(row.error.is_finite() && row.error > 0.0 && value.is_finite() && builds(value)) {
+    let value = base * factor;
+    if !(error.is_finite() && error > 0.0 && value.is_finite() && builds(value)) {
         return Err("cli-fit-write-refused");
     }
     // Halving between the value and the bound found refused: the bound is the nearest one that builds.
@@ -922,22 +938,8 @@ fn fitted_band(
         }
         good
     };
-    let half = sigmas * base * row.error;
+    let half = sigmas * base.abs() * error;
     Ok([value, taken(value - half), taken(value + half)])
-}
-
-/// `text` (a config) with `key = [low, high]` under `[bounds]`, where the config has no entry for it yet.
-fn with_bound(text: &str, key: &str, low: f64, high: f64) -> String {
-    let (parent, leaf) = key.rsplit_once('.').unwrap_or(("", key));
-    let header = if parent.is_empty() { "[bounds]".to_string() } else { format!("[bounds.{parent}]") };
-    let entry = format!("{leaf} = [{low:?}, {high:?}]\n");
-    match text.find(&format!("\n{header}\n")) {
-        Some(at) => {
-            let end = at + header.len() + 2;
-            format!("{}{entry}{}", &text[..end], &text[end..])
-        }
-        None => format!("{text}\n{header}\n{entry}"),
-    }
 }
 
 /// The trace named by `--trace`: through the mapping file `--map` (a vendor export; see
@@ -1125,6 +1127,57 @@ fn check_dataset(args: &Args, tr: &Translations) -> Result<(), Failure> {
     }
     problems.iter().for_each(|p| println!("{}", tr.tr_arg("dataset-problem", p)));
     Err(Failure("dataset-problem", format!("{} problems in {dir}", problems.len())))
+}
+
+/// `parameters <machine>`: per motor, the drive settings of the config with the SINAMICS parameter that takes each, and its
+/// value in that parameter's unit (`sim_components::parameters`). The config is read as the file states it, with
+/// `--set` applied: the drive part is read before the parts are resolved.
+fn parameters(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    use sim_components::parameters::{Error, Family, list_resolved};
+    // The drive part is read from the config as named (the parts are emptied once resolved); the values come from the
+    // resolved one with `--set` on top, as in every command.
+    let (entry, named) = named_config(args)?;
+    let (_, cfg) = machine_and_config(args)?;
+    let family = match args.option("--family") {
+        Some(text) => {
+            Some(Family::parse(text).ok_or_else(|| Failure("cli-error-bad-argument", format!("--family {text}")))?)
+        }
+        None => None,
+    };
+    let rows = list_resolved(entry, &named, &cfg, family).map_err(|e| match e {
+        Error::Config(e) => e.into(),
+        Error::NoDrive(motor) => Failure("cli-error-parameters-no-drive", motor),
+        Error::UnknownDrive(article) => Failure("cli-error-parameters-unknown-drive", article),
+        Error::NotRotaryServo(motor) => Failure("cli-error-parameters-not-servo", motor),
+    })?;
+    // Six significant digits, without the trailing zeros of a fixed notation.
+    let number = |x: f64| {
+        if x != 0.0 && !(1e-4..1e7).contains(&x.abs()) {
+            return format!("{x:.5e}");
+        }
+        let text = format!("{x:.6}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let mut out = output(args, "--out")?;
+    writeln!(out, "motor,key,value,unit,parameter,name,parameter_value,parameter_unit,basis").map_err(io)?;
+    for r in &rows {
+        let converted = r.parameter_value.map_or(String::new(), number);
+        writeln!(
+            out,
+            "{},{},{},{},{},{},{converted},{},{}",
+            r.motor,
+            r.key,
+            number(r.value),
+            r.unit,
+            r.parameter,
+            r.name,
+            r.parameter_unit,
+            r.basis.name()
+        )
+        .map_err(io)?;
+    }
+    eprintln!("{}", tr.tr("cli-parameters-note"));
+    Ok(())
 }
 
 fn io(e: std::io::Error) -> Failure {
@@ -1322,9 +1375,10 @@ fn duties(args: &Args, entry: &'static MachineEntry) -> Result<Vec<(Config, f64)
                 cfg.set_text(&format!("parts.{key} = {name:?}"))?;
             }
         }
+        before_parts(args, entry, &mut cfg)?;
         let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
         for assignment in args.options("--set") {
-            cfg.set_text(assignment)?;
+            sim_components::set_config_text(entry, &mut cfg, assignment)?;
         }
         out.push((cfg, weight));
     }
@@ -1579,7 +1633,7 @@ fn compare_kinematics(args: &Args, _tr: &Translations) -> Result<(), Failure> {
     for entry in entries {
         let mut cfg = entry.config();
         for assignment in args.options("--set") {
-            cfg.set_text(assignment)?;
+            sim_components::set_config_text(entry, &mut cfg, assignment)?;
         }
         machines.push((entry, cfg));
     }
@@ -2264,8 +2318,9 @@ fn tune(args: &Args, tr: &Translations) -> Result<(), Failure> {
             eprintln!("{}", tr.tr_arg("tune-lowered", &m.id));
         }
     }
-    if let Some(n) = &tuned.notch {
-        let at = format!("{:.1} Hz, {:.1} Hz, {:.2}", n.frequency_hz, n.bandwidth_hz, n.gain_factor);
+    for n in &tuned.notches {
+        let id = &tuned.motors[n.motor].id;
+        let at = format!("{id}: {:.1} Hz, {:.1} Hz, {:.2}", n.frequency_hz, n.bandwidth_hz, n.gain_factor);
         eprintln!("{}", tr.tr_arg("tune-notch", &at));
     }
     if !tuned.met {

@@ -175,17 +175,36 @@ impl Config {
         if path == "format_version" && value.as_integer() != Some(FORMAT_VERSION) {
             return Err(ConfigError::Version(format!("{:?}", value.as_integer())));
         }
-        let old = self.get(path)?;
-        let value = match (old, value) {
-            (Value::Float(_), Value::Integer(i)) => Value::Float(i as f64),
-            (old, new) if old.same_type(&new) => new,
-            _ => return Err(ConfigError::Type(path.into())),
+        let value = of_type(self.get(path)?, value, path)?;
+        self.insert(path, value)
+    }
+
+    /// `set`, and where the config has not got `path`, adds it where a file may have it (`check_keys` with the same
+    /// `schema` and `optional` takes it): in the type `schema` has there, or as given for a key of `optional`. A path of
+    /// neither is refused as by `set` (`Missing`), so a misspelt key still cannot pass silently.
+    pub fn set_within(&mut self, path: &str, value: Value, schema: &Config, optional: &[&str]) -> Result<()> {
+        if path == "format_version" || self.get(path).is_ok() {
+            return self.set(path, value);
+        }
+        let value = match schema.get(path) {
+            Ok(Value::Table(_)) => return Err(ConfigError::Type(path.into())),
+            Ok(old) => of_type(old, value, path)?,
+            Err(_) if optional.contains(&path) && !value.is_table() => value,
+            Err(e) => return Err(e),
         };
+        self.insert(path, value)
+    }
+
+    /// `value` at `path`, with the tables on the way made where they are missing.
+    fn insert(&mut self, path: &str, value: Value) -> Result<()> {
         let (parents, leaf) = path.rsplit_once('.').unwrap_or(("", path));
         let mut table = &mut self.0;
         for part in parents.split('.').filter(|p| !p.is_empty()) {
-            table =
-                table.get_mut(part).and_then(Value::as_table_mut).ok_or_else(|| ConfigError::Missing(path.into()))?;
+            table = table
+                .entry(part)
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .ok_or_else(|| ConfigError::Type(path.into()))?;
         }
         table.insert(leaf.into(), value);
         Ok(())
@@ -193,14 +212,14 @@ impl Config {
 
     /// Applies one `path=value` assignment, with the value in TOML syntax.
     pub fn set_text(&mut self, assignment: &str) -> Result<()> {
-        let bad = || ConfigError::Parse(assignment.into());
-        let (path, value) = assignment.split_once('=').ok_or_else(bad)?;
-        let parsed: Table = format!("v = {value}").parse().map_err(|_| bad())?;
-        // One assignment: a second line ("a = 1\nb = 2") parsed beside `v` and was dropped without a word.
-        if parsed.len() != 1 {
-            return Err(bad());
-        }
-        self.set(path.trim(), parsed["v"].clone())
+        let (path, value) = assignment_of(assignment)?;
+        self.set(path, value)
+    }
+
+    /// `set_text` as `set_within` adds a key.
+    pub fn set_text_within(&mut self, assignment: &str, schema: &Config, optional: &[&str]) -> Result<()> {
+        let (path, value) = assignment_of(assignment)?;
+        self.set_within(path, value, schema, optional)
     }
 
     /// The config as TOML text, which `parse` reads back to the same config. Comments are not kept.
@@ -213,6 +232,11 @@ impl Config {
     /// is close (at most 2 edits, or a third of the path's length); for a value out of range or of the wrong type the
     /// value the path has.
     pub fn hint(&self, error: &ConfigError) -> Option<ConfigHint> {
+        self.hint_within(error, &Config(Table::new()), &[])
+    }
+
+    /// `hint`, with the paths `set_within` may add (`schema`'s and `optional`) among those a misspelt one is near.
+    pub fn hint_within(&self, error: &ConfigError, schema: &Config, optional: &[&str]) -> Option<ConfigHint> {
         // A float as Rust writes it: 1e300, where TOML's text spells out all 301 digits.
         let shown = |value: &Value| match value {
             Value::Float(f) if f.is_finite() => format!("{f:?}"),
@@ -221,7 +245,8 @@ impl Config {
         match error {
             ConfigError::Missing(path) | ConfigError::Unknown(path) => {
                 let near = path.chars().count().div_ceil(3).max(2);
-                let paths = self.leaves().into_iter().map(|(p, _)| p);
+                let paths = self.leaves().into_iter().chain(schema.leaves()).map(|(p, _)| p);
+                let paths = paths.chain(optional.iter().map(|p| p.to_string()));
                 let (distance, nearest) = paths.map(|p| (edit_distance(path, &p), p)).min_by_key(|(d, _)| *d)?;
                 (distance > 0 && distance <= near).then_some(ConfigHint::Nearest(nearest))
             }
@@ -269,6 +294,27 @@ pub fn number(value: f64, path: &str) -> Result<f64> {
         Ok(value)
     } else {
         Err(ConfigError::Bounded(Bound::Number, path.into()))
+    }
+}
+
+/// The path and the value (TOML syntax) of one `path=value` assignment.
+fn assignment_of(assignment: &str) -> Result<(&str, Value)> {
+    let bad = || ConfigError::Parse(assignment.into());
+    let (path, value) = assignment.split_once('=').ok_or_else(bad)?;
+    let mut parsed: Table = format!("v = {value}").parse().map_err(|_| bad())?;
+    // One assignment: a second line ("a = 1\nb = 2") parsed beside `v` and was dropped without a word.
+    if parsed.len() != 1 {
+        return Err(bad());
+    }
+    Ok((path.trim(), parsed.remove("v").ok_or_else(bad)?))
+}
+
+/// `new` in the type of `old`: an integer where a float was is the float, any other change of type is refused.
+fn of_type(old: &Value, new: Value, path: &str) -> Result<Value> {
+    match (old, new) {
+        (Value::Float(_), Value::Integer(i)) => Ok(Value::Float(i as f64)),
+        (old, new) if old.same_type(&new) => Ok(new),
+        _ => Err(ConfigError::Type(path.into())),
     }
 }
 
@@ -348,6 +394,29 @@ mod tests {
         assert!(c.set_text("a.typo = 1").is_err());
         assert!(c.set_text("a.on = 1").is_err());
         assert_eq!(c.leaves().len(), 3);
+    }
+
+    /// A key the config has not got is added where the schema has it (in the schema's type: an integer for a float is the
+    /// float, a bool for it refused) or the optional list names it, with its tables; a misspelt one is still refused, and
+    /// the hint finds the key it was meant for among those it could have added.
+    #[test]
+    fn set_within_adds_the_keys_a_file_may_have() {
+        let schema = Config::parse("format_version = 1\n[a]\nmass_kg = 2.0\n[d.x]\nkp = 0.5\n").unwrap();
+        let optional = ["r.altitude_m"];
+        let mut c = Config::parse("format_version = 1\n[a]\nmass_kg = 2.0\n").unwrap();
+        c.set_text_within("d.x.kp = 1", &schema, &optional).unwrap();
+        assert_eq!(c.get("d.x.kp"), Ok(&Value::Float(1.0)));
+        c.set_text_within("r.altitude_m = 2000", &schema, &optional).unwrap();
+        assert_eq!(c.f64("r.altitude_m"), Ok(2000.0));
+        assert_eq!(c.set_text_within("a.mass_kg = 3", &schema, &optional), Ok(()));
+        assert_eq!(c.set_text_within("d.x.kp = true", &schema, &optional), Err(ConfigError::Type("d.x.kp".into())));
+        assert_eq!(c.set_text_within("d.x = 1", &schema, &optional), Err(ConfigError::Type("d.x".into())));
+        let misspelt = c.set_text_within("r.altitud_m = 2000", &schema, &optional).unwrap_err();
+        assert_eq!(misspelt, ConfigError::Missing("r.altitud_m".into()));
+        let fresh = Config::parse("format_version = 1\n").unwrap();
+        assert_eq!(fresh.hint_within(&misspelt, &schema, &optional), Some(ConfigHint::Nearest("r.altitude_m".into())));
+        assert_eq!(fresh.hint(&misspelt), None);
+        assert_eq!(Config::parse(&c.to_text().unwrap()), Ok(c));
     }
 
     /// NaN and infinity are numbers to TOML and to no component: no read lets them through.

@@ -367,7 +367,7 @@ pub fn configured(
         None => entry.config(),
     };
     for assignment in sets {
-        cfg.set_text(assignment).map_err(config_error)?;
+        sim_components::set_config_text(entry, &mut cfg, assignment).map_err(config_error)?;
     }
     let points = match trajectory {
         Some(path) => Some(

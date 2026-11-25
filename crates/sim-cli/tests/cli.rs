@@ -178,6 +178,53 @@ fn config_errors_say_what_was_meant() {
     assert!(text(&german.stderr).contains(&format!("(meinten Sie {key}?)")), "{}", text(&german.stderr));
 }
 
+/// `--set` adds a key the config has not got where a config file may have it (`Config::set_within`): a motor's own gain
+/// on the machine of two motors whose default gives neither a `[drive.<id>]` (measured with `margins`: that motor's
+/// crossover at the start pose moves by more than 10 %, the other's, coupled through the mechanics only, by less than
+/// 1 %; measured 22 % and 0.2 %), and a drive's installation condition, which derates the drive as it does in a file:
+/// the S210 6SL3210-5HE11-5UF0 at 3000 m and 45 degC has 90 % of its 5 A (`catalog_parts`), the limit of
+/// `drive-current`. A misspelt key of either kind is still refused, with the one it was meant for.
+#[test]
+fn set_adds_the_keys_a_config_file_may_have() {
+    let two = |e: &&sim_core::MachineEntry| {
+        let cfg = e.config();
+        let motors = (e.build)(&cfg).unwrap().motors().to_vec();
+        motors.len() == 2 && motors.iter().all(|m| cfg.get(&format!("drive.{}", m.id)).is_err())
+    };
+    let entry = MACHINES.iter().copied().find(two).unwrap();
+    let ids: Vec<String> = (entry.build)(&entry.config()).unwrap().motors().iter().map(|m| m.id.to_string()).collect();
+    let crossovers = |set: &[&str]| -> Vec<f64> {
+        let out = cli(&[&["margins", entry.id][..], set].concat());
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        // The start pose's rows come first, one per motor in order: the crossover is the third column.
+        text(&out.stdout).lines().skip(1).take(2).map(|l| l.split(',').nth(2).unwrap().parse().unwrap()).collect()
+    };
+    let shared = entry.config().f64("drive.velocity_kp_nm_s_rad").unwrap();
+    let own = format!("drive.{}.velocity_kp_nm_s_rad={:?}", ids[0], 1.35 * shared);
+    let (before, after) = (crossovers(&[]), crossovers(&["--set", &own]));
+    assert!(after[0] / before[0] > 1.1 && (after[1] / before[1] - 1.0).abs() < 0.01, "{before:?} -> {after:?}");
+
+    let one = one_belt_axis();
+    let derated = |set: &[&str]| {
+        let args = [&["verdicts", one.id, "--motor", "1FK2205-4AF", "--drive", "6SL3210-5HE11-5UF0"][..], set];
+        let out = cli(&args.concat());
+        let row = text(&out.stdout).lines().find(|l| l.starts_with("drive-current,")).map(String::from);
+        row.unwrap_or_else(|| panic!("{}", text(&out.stderr))).split(',').nth(3).unwrap().parse::<f64>().unwrap()
+    };
+    assert_eq!(derated(&[]), 5.0);
+    let conditions = ["--set", "ratings.drive_altitude_m=3000", "--set", "ratings.drive_ambient_c=45"];
+    assert!((derated(&conditions) - 4.5).abs() < 1e-9, "{}", derated(&conditions));
+
+    for (typo, meant) in [
+        (format!("drive.{}.velocty_kp_nm_s_rad", ids[0]), format!("drive.{}.velocity_kp_nm_s_rad", ids[0])),
+        ("ratings.drive_altitud_m".to_string(), "ratings.drive_altitude_m".to_string()),
+    ] {
+        let out = cli(&["margins", entry.id, "--set", &format!("{typo}=1")]);
+        assert_eq!(out.status.code(), Some(2));
+        assert_eq!(text(&out.stderr).trim(), format!("Configuration value is missing: {typo} (did you mean {meant}?)"));
+    }
+}
+
 /// `--version` and `-V` print the program's name and version and succeed (they were refused as unknown options).
 #[test]
 fn version_prints_the_name_and_the_version() {
@@ -2493,8 +2540,8 @@ fn help_prints_the_commands_one_to_a_line_and_the_options_of_one() {
 /// differs from `tuning`, in both languages.
 #[test]
 fn tune_exits_1_where_its_targets_are_not_met() {
-    let out =
-        cli(&["tune", "single-axis", "--set", "cycle.segment=[]", "--phase-margin", "179", "--gain-margin", "80"]);
+    let id = one_belt_axis().id;
+    let out = cli(&["tune", id, "--set", "cycle.segment=[]", "--phase-margin", "179", "--gain-margin", "80"]);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
     let rows = text(&out.stdout);
     assert!(rows.starts_with("motor,key,before,after,") && rows.contains("drive.velocity_kp_nm_s_rad"), "{rows}");
@@ -2519,4 +2566,41 @@ fn verdicts_say_where_the_machines_own_parts_are_not_checked() {
         let figure = text(&out.stderr).contains("least clearance between the machine's own parts");
         assert_eq!((row, said, figure), (checked, !checked, checked), "{id}: {}", text(&out.stderr));
     }
+}
+
+/// `parameters` prints the header and, for the EXCT-30 (an S210 converter by name), the speed controller's gain as the
+/// p1460 row of each motor with the config's number unchanged, says on the error stream that it is an aid to be checked
+/// against the firmware, and exits 0; without a drive part it exits 2 with nothing on standard output, and `--family`
+/// makes the list (an S120's Kv parameter p2538 comes up; a family that is none is refused).
+#[test]
+fn parameters_lists_the_drive_parameters_and_refuses_a_machine_without_a_catalogue_drive() {
+    let exct = concat!(env!("CARGO_MANIFEST_DIR"), "/../machine-t-gantry/exct-30.toml");
+    let out = cli(&["parameters", "t-gantry", "--config", exct]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    let mut lines = stdout.lines();
+    assert_eq!(lines.next(), Some("motor,key,value,unit,parameter,name,parameter_value,parameter_unit,basis"));
+    let kp: Vec<Vec<&str>> =
+        stdout.lines().filter(|l| l.contains(",velocity_kp_nm_s_rad,")).map(|l| l.split(',').collect()).collect();
+    assert_eq!(kp.len(), 2, "one per motor: {stdout}");
+    for f in &kp {
+        assert_eq!(
+            (f.len(), f[3], f[4], f[5], f[7], f[8]),
+            (9, "N m s/rad", "p1460", "Speed controller P gain", "Nms/rad", "printed")
+        );
+        assert_eq!(f[2], f[6], "Kp is kept");
+    }
+    assert!(stdout.lines().any(|l| l.contains(",current_kp_v_a,") && l.ends_with(",,,,none")), "{stdout}");
+    assert!(text(&out.stderr).contains("commissioning") && text(&out.stderr).contains("firmware"));
+    let german = text(&cli(&["parameters", "t-gantry", "--config", exct, "--lang", "de"]).stderr);
+    assert!(german.contains("Inbetriebnahme"), "{german}");
+
+    let none = cli(&["parameters", "t-gantry"]);
+    assert_eq!((none.status.code(), none.stdout.is_empty()), (Some(2), true));
+    assert!(text(&none.stderr).contains("--family"), "{}", text(&none.stderr));
+    let s120 = cli(&["parameters", "t-gantry", "--family", "s120"]);
+    assert_eq!(s120.status.code(), Some(0), "{}", text(&s120.stderr));
+    assert!(text(&s120.stdout).contains(",p2538,"));
+    assert_eq!(cli(&["parameters", "t-gantry", "--family", "g120"]).status.code(), Some(2));
+    assert!(text(&cli(&["help", "parameters"]).stdout).contains("--family"));
 }

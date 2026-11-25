@@ -9,7 +9,7 @@ const WIDTH: usize = 100;
 const COLUMN: usize = 30;
 
 /// The commands, in the order of the overview.
-pub(super) const COMMANDS: [&str; 26] = [
+pub(super) const COMMANDS: [&str; 27] = [
     "list",
     "run",
     "analyze",
@@ -36,6 +36,7 @@ pub(super) const COMMANDS: [&str; 26] = [
     "accuracy",
     "report",
     "fmu",
+    "parameters",
 ];
 
 /// The topics beside the commands: the options every command takes, the path formats and the units.

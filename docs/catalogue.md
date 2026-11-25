@@ -23,6 +23,7 @@ These files are read by the simulator itself. They are compiled into `sim-compon
 | `siemens/motors_1fk2_s120.csv`, `siemens/motors_1ft2_s120.csv` | The thermal time constant of an S210 motor by name (34 of the 96 are in neither file; for them the config's value stays); the 1FK2 and 1FT2 by name at `s120`, and in the search with `--supply s120` |
 | `siemens/motors_s120.csv`, `siemens/motors_s120_electrical.csv` | The 1FK7 and 1FT7 by name at `s120` (with winding resistance and inductance from the data sheets) and their paired Motor Module; the search with `--supply s120` |
 | `siemens/converters_s210.csv`, `siemens/motor_modules_s120.csv`, `siemens/derating_s210.csv`, `siemens/derating_s120.csv` | A drive by name (`[parts] drive`, `--drive`): its rated and maximum output current, the rated and base load current derated for the installation conditions the config gives. The search pairs each motor with one (see [pairing](#pairing-a-motor-with-its-drive)) |
+| `siemens/parameters_s120.csv`, `siemens/parameters_s210.csv` | `sim-cli parameters MACHINE [--family s120\|s210]`: each motor's drive settings as the drive's parameter numbers, names, units and converted values |
 | `siemens/gearbox_nrb.csv`, `_nrk.csv`, `_nlc.csv`, `_sp.csv` | A gearbox by name (`[parts] gearbox`, `--gearbox`) and the gearbox search |
 | `siemens/gearbox_mass.csv` | The gearbox's mass in the search's `mass_kg` and `cost_kg` (the SP100's and the other makers' from their own rows) |
 | `wittenstein/`, `neugart/`, `apex/`, `harmonicdrive/` `gearbox_*.csv` | A gearbox by name and the gearbox search (`--gearboxes wittenstein-sp`, see [mechanics](#mechanics-gearboxes-screws-guides-linear-motors-belts-belt-axes)) |
@@ -263,6 +264,16 @@ Columns: `part_number`, `axes`, `duty_type`, `rated_output_current_a`, `base_loa
 | Script | none: typed in from the documents, figures only |
 
 `apply_drive` (`ratings.drive_ambient_c`, `drive_altitude_m`, `drive_pulse_frequency_hz`; absent: the rated conditions, 40 °C, 1000 m, 4 kHz for an S120 and 8 kHz for an S210) multiplies the rated and the base load current by the factor, interpolated linearly between the table's points, and refuses a condition beyond the table (above 4000 m, above 50 °C for an S210 or 55 °C for an S120, an S210 pulse frequency other than 8 kHz, above 16 kHz, above 45 °C at 16 kHz). The S210's factor is its table of altitude against ambient temperature; the S120's is the product of the factors of altitude (10 % per 1000 m above 1000 m), ambient temperature (2.67 % per K above 40 °C) and pulse frequency. Siemens does not say that the factors multiply: that is the simulator's assumption on the safe side. Of the two ways Siemens offers to trade altitude (10 % less current per 1000 m, or 5 K less ambient per 1000 m) only the current reduction is implemented. Open points, not guessed: whether the derating reaches the maximum output current (it is left as printed, so `drive-peak-current` is not derated), and the C/D-type manual's 3.5 K per 500 m beside the 5 K per 1000 m in the same row. Two cells of the S210 table (the 1000 m row, and 2000 m at 45 °C) are read from a merged cell of the PDF's text layer as 100 %: their `basis` is `inferred`. The search's `estimated` names `drive-derating` when a factor other than 1 was applied. A drive of another maker has no derating data: its rows give their rated conditions only, and a condition set for it is refused. Sources and figures with pages: [vendor-facts](development/vendor-facts.md).
+
+### `siemens/parameters_s120.csv` and `siemens/parameters_s210.csv`
+
+| | |
+| --- | --- |
+| Source | S120: SINAMICS S120/S150 List Manual 07/2018 (`lh1-<page>`); S210: operating instructions 09/2022 (`s210-<printed page>`). Each row's page is in its `source` column, its sources in the `.meta.toml` beside it |
+| A row is | One config key of `[drive]` and the drive parameter that holds it: `config_key`, `parameter`, `name` and `unit` as printed, `factor` (parameter value = config value x factor), `rule` (a conversion that is no factor: the notch's damping, the ramps from p1082), `basis` (`printed` or `derived`), `source`, `note`. 20 and 8 rows |
+| Script | none: typed in from the documents |
+
+`sim-cli parameters` (`parameters::list`) prints a row per motor and key of the config the machine is built from. The derived rows: Kv in p2538's unit 1000/min per mm is 0.06 x Kv in 1/s (the manual's p5275 example, page 1440); the notch's denominator damping p1659 is bandwidth / (2 f), the simulator's notch with numerator damping 0; the ramps p1121 and p1135 count from the maximum speed p1082, the simulator's from the rated speed.
 
 ### `siemens/line_modules_s120.csv` and `siemens/braking_s120.csv`
 

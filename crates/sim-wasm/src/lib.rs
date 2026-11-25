@@ -890,7 +890,7 @@ fn apply(r: &Request) -> Result<String, String> {
     let text = if r.config.trim().is_empty() { entry.default_config } else { r.config };
     let mut cfg = Config::parse(text).map_err(refused)?;
     for line in r.extra.lines().filter(|l| !l.trim().is_empty()) {
-        cfg.set_text(line).map_err(refused)?;
+        sim_components::set_config_text(entry, &mut cfg, line).map_err(refused)?;
     }
     let text = edited(text, &cfg).map_err(refused)?;
     let default = entry.config();

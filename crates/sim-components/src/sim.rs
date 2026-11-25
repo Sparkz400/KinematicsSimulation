@@ -340,9 +340,37 @@ pub fn load_config(entry: &MachineEntry, text: &str) -> Result<Config, ConfigErr
     Ok(cfg)
 }
 
+/// `Config::set_text` on a config of `entry`, which also adds a key the config has not got where a file of it may have
+/// it (`load_config`): a motor's own value of a shared key (`drive.<id>.velocity_kp_nm_s_rad`), a key of
+/// `analysis::RATINGS_BEYOND_DEFAULT`. A misspelt key is refused as by `set_text`.
+pub fn set_config_text(entry: &MachineEntry, cfg: &mut Config, assignment: &str) -> Result<(), ConfigError> {
+    match cfg.set_text(assignment) {
+        Err(ConfigError::Missing(_)) => {
+            cfg.set_text_within(assignment, &schema(entry, cfg)?, &crate::analysis::RATINGS_BEYOND_DEFAULT)
+        }
+        done => done,
+    }
+}
+
+/// `set_config_text` for `Config::set`.
+pub fn set_config(entry: &MachineEntry, cfg: &mut Config, path: &str, value: toml::Value) -> Result<(), ConfigError> {
+    match cfg.set(path, value.clone()) {
+        Err(ConfigError::Missing(_)) => {
+            cfg.set_within(path, value, &schema(entry, cfg)?, &crate::analysis::RATINGS_BEYOND_DEFAULT)
+        }
+        done => done,
+    }
+}
+
+/// `Config::hint` with the keys `set_config_text` may add among those a misspelt one is near.
+pub fn config_hint(entry: &MachineEntry, cfg: &Config, error: &ConfigError) -> Option<sim_core::ConfigHint> {
+    let schema = schema(entry, cfg).unwrap_or_else(|_| entry.config());
+    cfg.hint_within(error, &schema, &crate::analysis::RATINGS_BEYOND_DEFAULT)
+}
+
 /// The keys a config for `entry` may have: its default config's, and a motor's own table (`[motor.<id>]` and the rest
-/// of `catalog::PER_MOTOR_TABLES`) for any motor `cfg` gives one, with the shared table's keys, though the default has
-/// none for that motor (a seven-joint URDF on the arm whose default has six).
+/// of `catalog::PER_MOTOR_TABLES`) for every motor of the machine `cfg` builds and any motor `cfg` gives one, with the
+/// shared table's keys, though the default has none for that motor (a seven-joint URDF on the arm whose default has six).
 /// An id of a table that the machine built from `cfg` has no motor of is refused (`ConfigError::Invalid` with
 /// `<table>.<id>`), so a misspelt one is not silently unread. Where `cfg` does not build, the ids are not checked here:
 /// building it reports that error itself.
@@ -354,16 +382,18 @@ pub fn schema(entry: &MachineEntry, cfg: &Config) -> Result<Config, ConfigError>
         .ok()
         .map(|machine| machine.motors().iter().map(|m| m.id.to_string()).collect());
     for table in crate::catalog::PER_MOTOR_TABLES {
-        let (Some(shared), Some(own)) =
-            (default.get(table).ok().and_then(|v| v.as_table()), cfg.get(table).ok().and_then(|v| v.as_table()))
-        else {
-            continue;
-        };
-        for (id, value) in own {
-            if !value.is_table() || shared.contains_key(id) {
+        let Some(shared) = default.get(table).ok().and_then(|v| v.as_table()) else { continue };
+        let own = cfg.get(table).ok().and_then(|v| v.as_table()).into_iter().flatten();
+        // The tables `cfg` gives a motor, and one for every motor it could give one (what `set_within` may add).
+        let mut ids: Vec<&str> = own.filter(|(_, v)| v.is_table()).map(|(id, _)| id.as_str()).collect();
+        ids.extend(motors.iter().flatten().map(String::as_str).filter(|id| !id.is_empty()));
+        ids.sort_unstable();
+        ids.dedup();
+        for id in ids {
+            if shared.contains_key(id) {
                 continue;
             }
-            if motors.as_ref().is_some_and(|m| !m.contains(id)) {
+            if motors.as_ref().is_some_and(|m| !m.iter().any(|m| m == id)) {
                 return Err(ConfigError::Invalid(format!("{table}.{id}")));
             }
             text.push_str(&format!(

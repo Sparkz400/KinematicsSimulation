@@ -1,0 +1,9 @@
+config_key,parameter,name,unit,factor,rule,basis,source,note
+velocity_kp_nm_s_rad,p1460,Speed controller P gain,Nms/rad,1,,printed,s210-610,Torque at the motor shaft per speed error at the motor shaft
+velocity_tn_s,p1462,Speed controller integral time,ms,1000,,printed,s210-611,Tn of Kp (1 + 1/(Tn s))
+velocity_filter_s,p1441,Actual speed smoothing time,ms,1000,,printed,s210-610,PT1 on the actual speed (at most 50 ms)
+peak_torque_nm,p1520,Torque limit upper,Nm,1,,printed,s210-611,At the motor shaft
+peak_torque_nm,p1521,Torque limit lower,Nm,-1,,derived,s210-611,The lower limit is negative
+max_speed_rad_s,p1082,Maximum speed,rpm,9.549296585513721,,printed,s210-608,60/(2 pi) rpm per rad/s; p1083 and p1086 limit each direction further
+off1_ramp_s,p1121,OFF1 ramp-down time,s,1,ramp_time,derived,s210-608,p1121 is the time from the maximum speed p1082 to standstill; the simulator's is from the rated speed: p1121 = ramp x p1082 / rated speed
+off3_ramp_s,p1135,OFF3 ramp-down time,s,1,ramp_time,derived,s210-609,As p1121: from the maximum speed p1082

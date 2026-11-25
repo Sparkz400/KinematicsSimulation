@@ -1384,7 +1384,7 @@ impl Model {
     /// Edits one config value and applies the config to the running simulation.
     pub fn set_param(&mut self, path: &str, value: Value) {
         let before = self.config.clone();
-        match self.config.set(path, value) {
+        match sim_components::set_config(self.entry, &mut self.config, path, value) {
             Ok(()) => {
                 self.record_edit(before, Some(path));
                 self.reconfigure();
@@ -1471,7 +1471,7 @@ impl Model {
     /// CLI's message; a value the simulation refuses (outside a bound) comes back with `poll`, as with any edit.
     pub fn set_value(&mut self, assignment: &str) {
         let before = self.config.clone();
-        match self.config.set_text(assignment) {
+        match sim_components::set_config_text(self.entry, &mut self.config, assignment) {
             Ok(()) => {
                 self.record_edit(before, None);
                 self.reconfigure();
@@ -1490,7 +1490,7 @@ impl Model {
         let refused = |e: ConfigError| (e.key(), e.detail().to_string());
         let mut config = self.config.clone();
         for assignment in assignments {
-            config.set_text(assignment).map_err(refused)?;
+            sim_components::set_config_text(self.entry, &mut config, assignment).map_err(refused)?;
         }
         let fresh = Self::with_config(self.entry, self.lang, config, self.config_text.clone()).map_err(refused)?;
         let (file, opened) = (self.inputs.config_file.clone(), self.file.clone());
@@ -1803,7 +1803,8 @@ impl Model {
             if file.trim().is_empty() { Ok((self.entry, self.config.clone())) } else { self.config_of(file.trim()) };
         let made = base.and_then(|(entry, mut config)| {
             for assignment in assignments.split([';', '\n']).map(str::trim).filter(|a| !a.is_empty()) {
-                config.set_text(assignment).map_err(|e| (e.key(), e.detail().to_string()))?;
+                sim_components::set_config_text(entry, &mut config, assignment)
+                    .map_err(|e| (e.key(), e.detail().to_string()))?;
             }
             Ok((entry, config))
         });
