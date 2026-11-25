@@ -9,7 +9,7 @@ const WIDTH: usize = 100;
 const COLUMN: usize = 30;
 
 /// The commands, in the order of the overview.
-pub(super) const COMMANDS: [&str; 25] = [
+pub(super) const COMMANDS: [&str; 26] = [
     "list",
     "run",
     "analyze",
@@ -24,6 +24,7 @@ pub(super) const COMMANDS: [&str; 25] = [
     "bode",
     "tuning",
     "margins",
+    "tune",
     "modes",
     "workspace",
     "replay",

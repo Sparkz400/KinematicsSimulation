@@ -44,6 +44,7 @@ pub mod stepper;
 pub mod stop;
 pub mod trace;
 pub mod transmission;
+pub mod tune;
 
 pub use control::{Command, CommandError, Controller, LimitViolation, StopCategory, check_limits};
 pub use drive::DriveMode;
