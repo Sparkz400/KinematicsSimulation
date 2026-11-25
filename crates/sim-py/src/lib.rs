@@ -64,7 +64,8 @@ impl PyConfig {
         let mut cfg =
             sim_components::catalog::resolve(self.entry, &self.base).map_err(|e| config_error(self.entry, e))?;
         for (path, value) in &self.sets {
-            cfg.set(path, value.clone()).map_err(|e| config_error(self.entry, e))?;
+            sim_components::set_config(self.entry, &mut cfg, path, value.clone())
+                .map_err(|e| config_error(self.entry, e))?;
         }
         let schema = sim_components::schema(self.entry, &cfg).map_err(|e| config_error(self.entry, e))?;
         cfg.check_keys(&schema, &sim_components::analysis::RATINGS_BEYOND_DEFAULT)
@@ -76,8 +77,10 @@ impl PyConfig {
     /// One value set: a part into `base`, anything else onto the list. Nothing changes if the result is refused.
     fn assign(&mut self, path: &str, value: toml::Value) -> PyResult<()> {
         let mut next = self.clone();
-        if path.starts_with("parts.") {
-            next.base.set(path, value).map_err(|e| config_error(self.entry, e))?;
+        // A drive's installation conditions are read where its part is put in: into `base` with the parts.
+        if path.starts_with("parts.") || sim_components::catalog::DRIVE_CONDITION_KEYS.contains(&path) {
+            sim_components::set_config(self.entry, &mut next.base, path, value)
+                .map_err(|e| config_error(self.entry, e))?;
         } else {
             next.sets.push((path.to_string(), value));
         }

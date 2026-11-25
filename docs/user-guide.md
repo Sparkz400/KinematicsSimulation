@@ -44,7 +44,7 @@ sim-cli COMMAND MACHINE [options]
 | `--motor ARTICLE` | Put a motor of the Siemens S210 catalogue into the config, e.g. `1FK2205-4AF`. Sets `parts.motor` |
 | `--supply 230v` or `400v` | The supply the motor data is for. Sets `parts.motor_supply`. Default as in the config |
 | `--gearbox SIZE-FRAME-RATIO` | Put a catalogue gearbox into the config, e.g. `NRK070-04-5`. Sets `parts.gearbox` |
-| `--set path=value` | Change one config value, e.g. `--set mass.payload_kg=3.0`. Repeatable. Applied after the parts, so single values can be set on top of a catalogue part |
+| `--set path=value` | Change one config value, e.g. `--set mass.payload_kg=3.0`. Repeatable. Applied after the parts, so single values can be set on top of a catalogue part; a drive's installation conditions (`ratings.drive_ambient_c`, `drive_altitude_m`, `drive_pulse_frequency_hz`) before them, as the drive is derated when it is put in. A key the config has not got is added where a config file may have it: a motor's own value in `[drive.<id>]` and the other per-motor tables (`--set drive.b.velocity_kp_nm_s_rad=0.05`), or a key a file may add (the ratings beyond the default, these conditions); any other is refused with the nearest key |
 | `--out FILE` | Write the CSV to a file instead of standard output |
 | `--lang en` or `de` | Language of messages. The CSV headers are not translated |
 | `--catalog DIR` | Read the component catalogue from DIR, a copy of [`catalog/`](../catalog) of the same schema version, instead of the one built in; a table with a missing column or a short row is refused, naming the file and the column or line (see [catalogue](catalogue.md)). `sim-app` takes it too |

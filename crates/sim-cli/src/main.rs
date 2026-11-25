@@ -202,7 +202,7 @@ fn config_help(args: &Args, tr: &Translations, key: &str, arg: &str) -> String {
     };
     for assignment in args.options("--set") {
         // The refused one is what the error is about.
-        let _ = cfg.set_text(assignment);
+        let _ = sim_components::set_config_text(entry, &mut cfg, assignment);
     }
     // The failure carries key and path only; building the machine again from the same config finds the refusal with
     // the limit it broke, where the machine's own readers refused it (a check made elsewhere keeps the plain value).
@@ -210,7 +210,7 @@ fn config_help(args: &Args, tr: &Translations, key: &str, arg: &str) -> String {
         Err(again @ ConfigError::Bounded(..)) if again.detail() == arg => again,
         _ => error,
     };
-    match cfg.hint(&error) {
+    match sim_components::config_hint(entry, &cfg, &error) {
         Some(ConfigHint::Nearest(path)) => format!(" {}", tr.tr_arg("cli-hint-nearest", &path)),
         Some(ConfigHint::Value(value)) => format!(" {}", tr.tr_arg("cli-hint-value", &value)),
         Some(ConfigHint::Bounded(value, bound)) => {
@@ -386,11 +386,18 @@ fn machine(args: &Args) -> Result<&'static MachineEntry, Failure> {
 /// parts it names or `--motor`, `--supply`, `--gearbox`, `--drive`, `--belt` and `--axis` name put in from the catalogue, then every
 /// `--set path=value` applied on top.
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
-    let (entry, cfg) = named_config(args)?;
+    let (entry, mut cfg) = named_config(args)?;
+    // A drive's installation conditions are read where its part is put in (it is derated there): set before that.
+    for assignment in args.options("--set") {
+        let path = assignment.split('=').next().unwrap_or("").trim();
+        if sim_components::catalog::DRIVE_CONDITION_KEYS.contains(&path) {
+            sim_components::set_config_text(entry, &mut cfg, assignment)?;
+        }
+    }
     // Parts by name from the catalogue, here and not only in the simulator, so that single values can be set on top.
     let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
     for assignment in args.options("--set") {
-        cfg.set_text(assignment)?;
+        sim_components::set_config_text(entry, &mut cfg, assignment)?;
     }
     Ok((entry, cfg))
 }
@@ -849,7 +856,7 @@ fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas
     // What the file holds: the config before the parts it names are put in, so that those stay named.
     let (_, mut file) = named_config(args)?;
     for assignment in args.options("--set") {
-        file.set_text(assignment)?;
+        sim_components::set_config_text(entry, &mut file, assignment)?;
     }
     let mut written = Vec::new();
     for row in rows {
@@ -1370,7 +1377,7 @@ fn duties(args: &Args, entry: &'static MachineEntry) -> Result<Vec<(Config, f64)
         }
         let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
         for assignment in args.options("--set") {
-            cfg.set_text(assignment)?;
+            sim_components::set_config_text(entry, &mut cfg, assignment)?;
         }
         out.push((cfg, weight));
     }
@@ -1625,7 +1632,7 @@ fn compare_kinematics(args: &Args, _tr: &Translations) -> Result<(), Failure> {
     for entry in entries {
         let mut cfg = entry.config();
         for assignment in args.options("--set") {
-            cfg.set_text(assignment)?;
+            sim_components::set_config_text(entry, &mut cfg, assignment)?;
         }
         machines.push((entry, cfg));
     }
