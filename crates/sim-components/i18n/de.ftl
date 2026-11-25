@@ -223,6 +223,7 @@ param-torque_reserve = Zeitoptimale Bahn: genutzter Anteil der Drehmoment-Drehza
 param-tension_reserve = Zeitoptimale Bahn: genutzter Anteil des Zugkraftspielraums des Riemens
 param-tension_margin_n = Zeitoptimale Bahn: Abstand zu den Zuggrenzen des Riemens [N]
 param-time_optimal_margin = Zeitoptimale Bahn: genutzter Anteil aller Grenzen (1: alles)
+param-feed_override = Programm: Faktor auf den programmierten Vorschub F von G1, G2, G3 und Roboterbewegungen (1: wie programmiert)
 optimised-lift = Hubhöhe, Abschnitte { $arg } [m]
 optimised-via = Zwischenpunkt des gerundeten Hubs, Abschnitte { $arg } [m]
 optimised-fastest = Schnellster Zyklus nach der Konfiguration, wie sie dasteht [s]
@@ -615,6 +616,7 @@ program-error-motion = Eine Achse wird vor jeder Bewegungsart (G0, G1, G2, G3) g
 program-error-helix = Ein Kreisbogen verändert eine Achse außerhalb seiner Ebene (eine Helix), die die Bahn nicht kennt: { $arg }
 program-error-arc = Ein Kreisbogen lässt sich nicht auslegen: Anfang und Ende liegen verschieden weit vom Mittelpunkt, sein Radius ist zu klein für seine Enden, seine drei Punkte liegen auf einer Geraden, oder seine Zahlen sind zu groß, um seinen Mittelpunkt zu berechnen. { $arg }
 program-error-named = Eine Bewegung zu einer benannten Position, die das Programm nicht vereinbart, oder eine Bewegung ohne Ziel: { $arg }
+program-error-p = G4 braucht P (eine Verweilzeit in Sekunden, 0 bis 3600) allein in seinem Satz, und G64 nimmt P als Toleranz, die nicht negativ ist: { $arg }
 
 # Motor electrical and thermal model (14 November 2026)
 quantity-d-current = d-Strom (Feldschwächung)
