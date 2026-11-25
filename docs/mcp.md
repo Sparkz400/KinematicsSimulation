@@ -15,7 +15,7 @@ validated), so that the model passes the limits on instead of overclaiming.
 
 ### Install
 
-The extra `mcp` comes with the release after 1.0.0 on PyPI. With [uv](https://docs.astral.sh/uv/) nothing has to be
+The extra `mcp` is on PyPI from 1.1.0 on. With [uv](https://docs.astral.sh/uv/) nothing has to be
 installed by hand:
 
 ```bash

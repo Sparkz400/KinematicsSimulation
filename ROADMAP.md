@@ -104,8 +104,8 @@ No dates. What to verify before the release is in [TODO.md](docs/development/TOD
 
 ## Release
 
-- The Python package `kinematics-sim` is on PyPI as 1.0.0 (16 November 2026). 1.1.0, which brings the MCP server
-  (`kinematics-sim[mcp]`), is not tagged and not published.
+- The Python package `kinematics-sim` is on PyPI since 1.0.0 (16 November 2026); a version tag publishes it. 1.1.0
+  is the first release with the MCP server (`kinematics-sim[mcp]`).
 - The Linux .deb and the MSI were built and inspected but never installed; signing them; packages for Linux
   distributions other than Debian and Ubuntu.
 - The GitHub workflows restructured since the 1.0.0 cut have run on GitHub (CI as partitions, fuzzing, docs site);
