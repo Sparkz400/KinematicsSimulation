@@ -1661,12 +1661,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     // A path's clearance is in its run's verdict "collision"; the configured cycle's is told here.
     if args.option("--path").is_none() {
         let limit = cfg.non_negative("profile.min_clearance_m")?;
-        let planned = sim_components::collision::check_cycle(entry, &cfg)?;
-        // The verdict "self-collision" is then left out, as "collision" is without obstacles.
-        if planned.as_ref().is_none_or(|check| check.own.is_none()) {
-            eprintln!("{}", tr.tr("cli-planned-own-none"));
-        }
-        tell_plan(tr, planned, limit);
+        tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?, limit);
     }
     let cfg = path_instead(args, entry, cfg)?;
     if args.flag("--worst") {
@@ -1703,6 +1698,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
             .map_err(io)?;
         }
         tell_not_finite(tr, worst.iter().map(|w| &w.verdict));
+        tell_own_unchecked(tr, worst.iter().map(|w| &w.verdict));
         return out.flush().map_err(io);
     }
     // Whole numbers: at least one sample, and any seed from 0 on.
@@ -1756,7 +1752,19 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
         .map_err(io)?;
     }
     tell_not_finite(tr, bands.iter().map(|b| &b.verdict));
+    tell_own_unchecked(tr, bands.iter().map(|b| &b.verdict));
     out.flush().map_err(io)
+}
+
+/// On the error stream, where the verdicts have no row "self-collision": the machine's own parts were not checked (it
+/// has no two parts not joined at its start pose), which is not "clear", as "collision" is left out without obstacles.
+fn tell_own_unchecked<'a>(
+    tr: &Translations,
+    mut verdicts: impl Iterator<Item = &'a sim_components::analysis::Verdict>,
+) {
+    if !verdicts.any(|v| v.check == "self-collision") {
+        eprintln!("{}", tr.tr("cli-planned-own-none"));
+    }
 }
 
 /// `sensitivity <machine>`: the cycle with each parameter at its low and at its high bound of the config,
