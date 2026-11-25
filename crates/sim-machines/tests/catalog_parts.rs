@@ -560,6 +560,46 @@ fn the_search_ranks_three_passing_motors_by_their_hand_calculated_weight() {
     );
 }
 
+/// A price list reverses the weight order of the three motors above. By hand, two motors and two drives each (the
+/// 1FK2104-6AF with the 6SL3210-5HE11-0UF0, the other two with the 6SL3210-5HE11-5UF0): 2 * 900 + 2 * 200 = 2200,
+/// 2 * 400 + 2 * 100 = 1000 and 2 * 300 + 2 * 100 = 800, so by price the 1FK2206-2AF comes first. A list without the
+/// 5HE11-5UF0 leaves two candidates unpriced: they follow the priced one, with no price, and the list's lack names it.
+#[test]
+fn a_price_list_reverses_the_weight_order_and_unpriced_candidates_follow() {
+    use sim_components::catalog::{PriceList, apply_prices};
+    use sim_components::search::{Criterion, rank_by};
+    let wanted = |a: &str| ["1FK2206-2AF", "1FK2205-4AF", "1FK2104-6AF"].contains(&a);
+    let list = |text: &str| PriceList::parse(text).unwrap();
+    let mut found = search_motors(&machine_t_gantry::ENTRY, &exct_30(), "400v", &wanted, None);
+    let all = "part_number,price\n1FK2104-6AF,900\n1FK2205-4AF,400\n1FK2206-2AF,300\n\
+               6SL3210-5HE11-0UF0,200\n# the same drive twice over\n6SL3210-5HE11-5UF0,100\n";
+    assert!(apply_prices(&mut found, &list(all)).is_empty());
+    rank_by(&mut found, &[(Criterion::Price, 1.0)]);
+    let order: Vec<(&str, Option<f64>)> = found.iter().map(|c| (c.article, c.price)).collect();
+    assert_eq!(order, [("1FK2206-2AF", Some(800.0)), ("1FK2205-4AF", Some(1000.0)), ("1FK2104-6AF", Some(2200.0))]);
+    // By weight, as before: the lightest first, whatever it costs.
+    rank_by(&mut found, &[(Criterion::Cost, 1.0)]);
+    assert_eq!(found[0].article, "1FK2104-6AF");
+
+    let lacking = all.replace("6SL3210-5HE11-5UF0,100\n", "");
+    assert_eq!(apply_prices(&mut found, &list(&lacking)), ["6SL3210-5HE11-5UF0"]);
+    rank_by(&mut found, &[(Criterion::Price, 1.0)]);
+    let order: Vec<(&str, Option<f64>)> = found.iter().map(|c| (c.article, c.price)).collect();
+    // The unpriced two keep the weight order among themselves.
+    assert_eq!(order, [("1FK2104-6AF", Some(2200.0)), ("1FK2205-4AF", None), ("1FK2206-2AF", None)]);
+
+    // A gearbox with no price leaves the candidate without one, and the list's lack names the gearbox.
+    let single = &machine_single_axis::ENTRY;
+    let mut found = search_motors(single, &single.config(), "400v", &|a| a == "1FK2104-5AK", Some("NRK070"));
+    let drive = paired_drive("1FK2104-5AK", "400v");
+    let missing = apply_prices(&mut found, &list(&format!("part_number,price\n1FK2104-5AK,700\n{drive},120\n")));
+    assert!(found.iter().all(|c| !c.gearbox.is_empty() && c.price.is_none()));
+    assert!(missing.contains(&"NRK070-04-5".to_string()) && !missing.contains(&drive.to_string()), "{missing:?}");
+    // With the gearbox at 150: one motor, one gearbox, one drive, 700 + 150 + 120.
+    apply_prices(&mut found, &list(&format!("part_number,price\n1FK2104-5AK,700\n{drive},120\nNRK070-04-5,150\n")));
+    assert_eq!(found.iter().find(|c| c.gearbox == "NRK070-04-5").unwrap().price, Some(970.0));
+}
+
 /// The axis search on the EXCT-30 cycle with one motor: the EXCT-15 is ruled out by its stroke (Z 200 mm at most),
 /// the ELZI 30 by its speed (2 m/s against the config's 2.5 m/s), without a cycle; the others carry it, and the cost
 /// adds the axis's weight at the config's strokes. By hand: EXCT-30 25.38 + 1.48 * 10 + 0.37 * 2.5 = 41.105 kg, ELZI 40

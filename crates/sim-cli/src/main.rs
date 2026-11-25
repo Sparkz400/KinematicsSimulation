@@ -261,6 +261,7 @@ fn command_options(command: Option<&str>) -> &'static [&'static str] {
             "--motor-id",
             "--drives",
             "--rank-by",
+            "--prices",
             "--weights",
             "--robust",
             "--path",
@@ -1009,16 +1010,29 @@ fn search_supplies_of(args: &Args, cfg: &Config) -> Result<Vec<&'static str>, Fa
     Ok(supplies)
 }
 
-/// `--drives paired|neighbours|all` and `--rank-by CRITERIA` of `search` and `compare-kinematics`.
+/// `--drives paired|neighbours|all` and `--rank-by CRITERIA` of `search` and `compare-kinematics`. With a price list
+/// (`--prices` of `search`) the default ranking is by price; `price` without one is refused.
 fn search_choices(
     args: &Args,
+    prices: bool,
 ) -> Result<(sim_components::catalog::Drives, Vec<(sim_components::search::Criterion, f64)>), Failure> {
+    use sim_components::search::Criterion;
     let drives = args.option("--drives").unwrap_or("paired");
     let drives = drives.parse().map_err(|_| Failure("cli-error-bad-argument", format!("--drives {drives}")))?;
-    let by = args.option("--rank-by").unwrap_or("cost");
+    let by = args.option("--rank-by").unwrap_or(if prices { "price" } else { "cost" });
     let by = sim_components::search::parse_ranking(by)
         .ok_or_else(|| Failure("cli-error-bad-argument", format!("--rank-by {by}")))?;
+    if !prices && by.iter().any(|(c, _)| *c == Criterion::Price) {
+        return Err(Failure("cli-error-prices-needed", String::new()));
+    }
     Ok((drives, by))
+}
+
+/// `--prices FILE` of `search`: the user's price list (`catalog::PriceList`).
+fn price_list(args: &Args) -> Result<Option<sim_components::catalog::PriceList>, Failure> {
+    let Some(file) = args.option("--prices") else { return Ok(None) };
+    let list = sim_components::catalog::PriceList::parse(&read(file)?);
+    list.map(Some).map_err(|(line, key, arg)| Failure(key, format!("{file}:{line}: {arg}")))
 }
 
 /// The duty mix of `search`: with several `--config FILE`, each file's config (with the parts and `--set` of the command
@@ -1086,7 +1100,8 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     if motor.is_some() && axes {
         return Err(Failure("cli-usage", String::new()));
     }
-    let (drives, by) = search_choices(args)?;
+    let prices = price_list(args)?;
+    let (drives, by) = search_choices(args, prices.is_some())?;
     let robust: Option<usize> = args
         .option("--robust")
         .map(|n| n.parse().map_err(|_| Failure("cli-error-bad-argument", format!("--robust {n}"))))
@@ -1094,6 +1109,22 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let started = std::time::Instant::now();
     let options = sim_components::catalog::Options { gearboxes, axes, motor, drives, duties: &duties };
     let mut found = sim_components::catalog::search(entry, &cfg, &supplies, &wanted, &options)?;
+    if let Some(list) = &prices {
+        let missing = sim_components::catalog::apply_prices(&mut found, list);
+        let unpriced = found.iter().filter(|c| !c.parts.is_empty() && c.price.is_none()).count();
+        if unpriced > 0 {
+            let names = missing.iter().take(10).cloned().collect::<Vec<_>>().join(", ");
+            eprintln!("{}", tr.tr_arg("cli-search-unpriced", &format!("{unpriced}: {names}")));
+        }
+        // A mix cannot weigh a candidate without a figure; a single price puts those last.
+        let passing_unpriced = found.iter().filter(|c| c.passes() && c.price.is_none()).count();
+        if by.len() > 1
+            && by.iter().any(|(c, _)| *c == sim_components::search::Criterion::Price)
+            && passing_unpriced > 0
+        {
+            return Err(Failure("cli-error-prices-mix", passing_unpriced.to_string()));
+        }
+    }
     rank_by(&mut found, &by);
     let on_front = front(&found);
     let robust = robust.map(|top| robust_ranking(entry, &cfg, &duties, &found, top));
@@ -1127,7 +1158,8 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let columns: String = checks.iter().map(|c| format!(",u_{c}")).collect();
     let robust_columns =
         if robust.is_some() { ",robust_rank,robust_result,robust_check,robust_utilisation" } else { "" };
-    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns},torque_unit").map_err(io)?;
+    let price_header = if prices.is_some() { ",price" } else { "" };
+    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg{price_header},result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns},torque_unit").map_err(io)?;
     // The unit of peak_torque_nm: N on a machine of linear motors (the first motor's kind), else N m.
     let torque_unit = if (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0)) { "N" } else { "N m" };
     for (rank, c) in found.iter().enumerate() {
@@ -1141,9 +1173,15 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
             )
         });
         let result = if c.passes() { "ok" } else { "FAIL" };
+        // Empty where the candidate has no price.
+        let price = if prices.is_some() {
+            format!(",{}", c.price.map_or(String::new(), |p| format!("{p:.2}")))
+        } else {
+            String::new()
+        };
         write!(
             out,
-            "{},{},{},{},{},{},{:.2},{:.2},{result},{check},{utilisation:.4},{peak:.4},{rise:.2}",
+            "{},{},{},{},{},{},{:.2},{:.2}{price},{result},{check},{utilisation:.4},{peak:.4},{rise:.2}",
             c.axis,
             c.article,
             c.gearbox,
@@ -1291,7 +1329,7 @@ fn compare_kinematics(args: &Args, _tr: &Translations) -> Result<(), Failure> {
         machines.push((entry, cfg));
     }
     let prefix = args.option("--series").unwrap_or("");
-    let (drives, by) = search_choices(args)?;
+    let (drives, by) = search_choices(args, false)?;
     let options =
         sim_components::catalog::Options { gearboxes: args.option("--gearboxes"), drives, ..Default::default() };
     // Each machine at its own supply, unless the command line names one.

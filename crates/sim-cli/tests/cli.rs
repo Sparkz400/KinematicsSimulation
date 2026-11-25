@@ -2079,6 +2079,92 @@ fn search_takes_the_configs_own_supply() {
     assert!(text(&out.stderr).contains("0 / 1"), "{}", text(&out.stderr));
 }
 
+/// The user's price list on the single axis with one motor, by hand: the 1FK2104-5AK at 700 and its paired drive at 120
+/// (one motor, so one of each) cost 820, printed in a `price` column beside `cost_kg`; a list without the drive leaves
+/// the cell empty and names the drive's part number on the error stream; without `--prices` the table is the same
+/// but for that column (header and row). `--rank-by price` without a list is refused with exit 2, before any search.
+#[test]
+fn search_prices_a_candidate_from_the_users_list_and_says_what_it_lacks() {
+    let drive = sim_components::catalog::paired_drive("1FK2104-5AK", "400v");
+    let dir = std::env::temp_dir().join(format!("sim-cli-prices-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, body: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let search = |extra: &[&str]| {
+        let mut args = vec!["search", "single-axis", "--series", "1FK2104-5AK"];
+        args.extend_from_slice(extra);
+        cli(&args)
+    };
+    let plain = search(&[]);
+    assert!(plain.status.success(), "{}", text(&plain.stderr));
+    let plain = text(&plain.stdout);
+    assert!(!plain.lines().next().unwrap().contains("price"), "{plain}");
+
+    let full = write("full.csv", &format!("# my supplier, EUR\npart_number,price\n\n1FK2104-5AK,700\n{drive},120\n"));
+    let priced = search(&["--prices", full.as_str()]);
+    assert!(priced.status.success(), "{}", text(&priced.stderr));
+    let priced = text(&priced.stdout);
+    let cut = |table: &str, with_price: bool| -> Vec<Vec<String>> {
+        table
+            .lines()
+            .map(|l| l.split(',').map(String::from).collect::<Vec<_>>())
+            .map(|mut f| {
+                if with_price {
+                    f.remove(8);
+                }
+                f
+            })
+            .collect()
+    };
+    // The same table with the price column taken out; the column sits right after cost_kg.
+    assert_eq!(cut(&priced, true), cut(&plain, false), "{priced}");
+    let head: Vec<&str> = priced.lines().next().unwrap().split(',').collect();
+    assert_eq!((head[7], head[8]), ("cost_kg", "price"), "{priced}");
+    let row = priced.lines().nth(1).unwrap().split(',').collect::<Vec<_>>();
+    assert_eq!(row[1], "1FK2104-5AK", "{priced}");
+    assert_eq!(row[8], "820.00", "{priced}");
+
+    let lacking = write("lacking.csv", "part_number,price\n1FK2104-5AK,700\n");
+    let partial = search(&["--prices", lacking.as_str()]);
+    assert!(partial.status.success(), "{}", text(&partial.stderr));
+    let row = text(&partial.stdout).lines().nth(1).unwrap().split(',').map(String::from).collect::<Vec<_>>();
+    assert_eq!(row[8], "", "{row:?}");
+    assert!(text(&partial.stderr).contains(drive), "{}", text(&partial.stderr));
+
+    let wanted = search(&["--rank-by", "price"]);
+    assert_eq!(wanted.status.code(), Some(2));
+    assert!(text(&wanted.stdout).is_empty() && text(&wanted.stderr).contains("--prices"), "{}", text(&wanted.stderr));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A price list with a duplicate, a negative and a non-numeric price is refused with exit 2, naming the file and the
+/// line of the fault (the notes and blank lines count as lines); so is one without the header.
+#[test]
+fn a_faulty_price_list_is_refused_with_file_and_line() {
+    let dir = std::env::temp_dir().join(format!("sim-cli-prices-faulty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cases = [
+        ("duplicate.csv", "part_number,price\n# note\nA,1\n\nB,2\nA,3\n", ":6:", "A"),
+        ("negative.csv", "part_number,price\nA,1\nB,-2\n", ":3:", "B"),
+        ("text.csv", "part_number,price\nA,cheap\n", ":2:", "cheap"),
+        ("header.csv", "# a note\nA,1\n", ":2:", "A,1"),
+    ];
+    for (name, body, line, said) in cases {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        let file = path.to_string_lossy().into_owned();
+        let out = cli(&["search", "single-axis", "--series", "1FK2104-5AK", "--prices", file.as_str()]);
+        assert_eq!(out.status.code(), Some(2), "{name}");
+        let said_err = text(&out.stderr);
+        assert!(said_err.contains(&format!("{file}{line}")) && said_err.contains(said), "{name}: {said_err}");
+        assert!(text(&out.stdout).is_empty(), "{name}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// `modes --shapes` writes the app's mode list (`shapes::mode_views` at the start pose), and `workspace` its workspace
 /// map (`shapes::workspace_slice` at the middle of the third axis's range, with each motor's peak torque), on the first
 /// machine that has each; a machine whose motors move its tool as its axes has no map.

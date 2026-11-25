@@ -336,10 +336,12 @@ pub enum Criterion {
     Thermal,
     Inertia,
     Drive,
+    /// The user's price (`Candidate::price`, from `--prices`); infinite for a candidate without one.
+    Price,
 }
 
 /// The criteria by the names `--rank-by` takes.
-pub const CRITERIA: [(&str, Criterion); 7] = [
+pub const CRITERIA: [(&str, Criterion); 8] = [
     ("cost", Criterion::Cost),
     ("margin", Criterion::Margin),
     ("energy", Criterion::Energy),
@@ -347,6 +349,7 @@ pub const CRITERIA: [(&str, Criterion); 7] = [
     ("thermal", Criterion::Thermal),
     ("inertia", Criterion::Inertia),
     ("drive", Criterion::Drive),
+    ("price", Criterion::Price),
 ];
 
 impl Criterion {
@@ -355,6 +358,7 @@ impl Criterion {
         let figure = |f: &dyn Fn(&Figures) -> f64| c.figures.as_ref().map_or(f64::INFINITY, f);
         let value = match self {
             Criterion::Cost => c.cost,
+            Criterion::Price => c.price.unwrap_or(f64::INFINITY),
             Criterion::Margin => c.tightest().map_or(f64::INFINITY, |t| t.1),
             Criterion::Energy => figure(&|f| f.energy_j),
             Criterion::Error => figure(&|f| f.following_error_m),
