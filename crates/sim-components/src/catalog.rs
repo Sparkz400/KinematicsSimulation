@@ -1393,6 +1393,15 @@ pub fn axis_names() -> Vec<String> {
     out
 }
 
+/// The standard belts of the catalogue as `apply_belt` takes them: profile and width in mm, "AT5-25", one per row of
+/// `megadyne/belts.csv` (the Gates table is not read by name). Other widths are taken too, interpolated.
+pub fn belt_names() -> Vec<String> {
+    rows(table("megadyne/belts.csv"))
+        .iter()
+        .filter_map(|r| Some(format!("{}-{}", r["profile"], (number(r, "width_m")? * 1e9).round() / 1e6)))
+        .collect()
+}
+
 /// The rows of the belt axes other than the EXCT (`festo/belt_axes.csv`, with its torque formula): Bahr's, then the
 /// other makers' `belt_axes_*.csv`, with the maker; without Bahr's XY gantries and DLZPVI (`axis_names`).
 fn belt_axis_rows() -> Vec<(&'static str, Row)> {

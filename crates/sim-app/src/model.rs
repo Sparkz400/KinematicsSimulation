@@ -883,6 +883,10 @@ pub struct Model {
     /// The text the config was read from (the machine's default or a file), whose comments and layout a
     /// saved file keeps.
     config_text: String,
+    /// The file the config was last opened from or saved to ("" for none): apart from the field a path is typed
+    /// into, which may name a file about to be opened. A JSON machine file is held here too (to be reopened at the
+    /// next start), though Save does not write over it (`save_target`).
+    pub file: String,
     /// The last config the simulation took, to go back to when it refuses one, and the configs sent to it
     /// that it has not answered yet, oldest first.
     accepted: Config,
@@ -1099,6 +1103,7 @@ impl Model {
             last_edit: None,
             config,
             config_text: text,
+            file: String::new(),
             session,
             ended: false,
             history: History::new(HISTORY),
@@ -1260,6 +1265,7 @@ impl Model {
                     self.restart(fresh);
                     // A JSON file is held as TOML: Save does not write that over it.
                     self.inputs.config_file = if json { String::new() } else { path.into() };
+                    self.file = path.into();
                     self.say(("ui-machine-file-opened", path.into()));
                 }
                 Err(message) => self.say(message),
@@ -1283,6 +1289,7 @@ impl Model {
             Ok(fresh) => {
                 self.restart(fresh);
                 self.inputs.config_file = path.into();
+                self.file = path.into();
                 self.say(("ui-config-opened", path.into()));
             }
             Err(message) => self.say(message),
@@ -1312,6 +1319,7 @@ impl Model {
                 self.config_text = text;
                 self.clean = self.config.clone();
                 self.inputs.config_file = path.into();
+                self.file = path.into();
                 self.say(("ui-config-saved", path.into()));
             }
             Err(message) => self.say(message),
@@ -1402,6 +1410,12 @@ impl Model {
         }
     }
 
+    /// Where Save puts the config without asking: the file last opened or saved to, but not a JSON machine file (the
+    /// config is written as TOML); `None` where the file dialog is to be asked.
+    pub fn save_target(&self) -> Option<String> {
+        Some(self.file.clone()).filter(|f| !f.is_empty() && !f.to_ascii_lowercase().ends_with(".json"))
+    }
+
     /// The config differs from what was last opened, saved or taken from the machine's default.
     pub fn dirty(&self) -> bool {
         self.config != self.clean
@@ -1468,9 +1482,9 @@ impl Model {
             config.set_text(assignment).map_err(refused)?;
         }
         let fresh = Self::with_config(self.entry, self.lang, config, self.config_text.clone()).map_err(refused)?;
-        let file = self.inputs.config_file.clone();
+        let (file, opened) = (self.inputs.config_file.clone(), self.file.clone());
         self.restart(fresh);
-        self.inputs.config_file = file;
+        (self.inputs.config_file, self.file) = (file, opened);
         Ok(())
     }
 
@@ -2072,9 +2086,16 @@ impl Model {
             return self.say(("ui-search-bad-supply", inputs.supply));
         }
         let (standing, motors, tr) = (self.standing(), self.session.motors.clone(), self.tr.clone());
+        let linear = self.session.motor_linear.first().copied().unwrap_or(false);
         let started = self.config.clone();
         let job = Job::spawn(move |_| {
-            let refused = |e: ConfigError| (e.key(), e.detail().to_string());
+            // The failing checks of `error-cycle-fails-already` come as ids: said by their labels.
+            let refused = |e: ConfigError| match e.key() {
+                key @ "error-cycle-fails-already" => {
+                    (key, sim_components::report::check_labels(e.detail(), linear, &tr))
+                }
+                key => (key, e.detail().to_string()),
+            };
             let command = |e: CommandError| (e.key, String::new());
             // As the command line reads them (`import::decode`): a file saved by Excel starts with a byte order mark,
             // or is UTF-16, which read as text gave "error-trace-column: time".

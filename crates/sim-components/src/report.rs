@@ -15,6 +15,16 @@ pub fn check_key(check: &str, linear: bool) -> String {
     if linear && check == "motor-speed" { "check-motor-speed-linear".into() } else { format!("check-{check}") }
 }
 
+/// The ids of failing checks, joined by ", " (as `error-cycle-fails-already` carries them), as their labels joined the
+/// same way; an id with no label stays as it is.
+pub fn check_labels(ids: &str, linear: bool, tr: &Translations) -> String {
+    let label = |id: &str| {
+        let key = check_key(id, linear);
+        if tr.has(&key) { tr.tr(&key).to_string() } else { id.to_string() }
+    };
+    ids.split(", ").map(label).collect::<Vec<_>>().join(", ")
+}
+
 /// One part of the report, in reading order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
@@ -948,6 +958,18 @@ impl std::fmt::Write for Bytes<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ids of an `error-cycle-fails-already` detail become the labels, joined as they were; a linear motor's speed
+    /// has its own unit, and an id with no label stays as it is.
+    #[test]
+    fn failing_check_ids_are_shown_by_their_labels() {
+        let tr = |lang| Translations::parse(crate::I18N.iter().find(|(l, _)| *l == lang).unwrap().1);
+        let (en, de) = (tr("en"), tr("de"));
+        let ids = "motor-speed, no-such-check";
+        assert_eq!(check_labels(ids, false, &en), "Motor speed, peak [rad/s], no-such-check");
+        assert_eq!(check_labels(ids, true, &en), "Motor speed, peak [m/s], no-such-check");
+        assert_eq!(check_labels("motor-speed", false, &de), "Motordrehzahl, Spitze [rad/s]");
+    }
 
     #[test]
     fn sources_follow_the_comments() {

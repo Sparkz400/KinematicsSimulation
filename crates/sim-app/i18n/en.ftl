@@ -103,6 +103,7 @@ ui-modified = modified
 ui-modified-hint = The config differs from the file or the machine's default it came from. Save it, or it is lost when the machine is switched or the window closed.
 ui-unsaved-title = Unsaved changes
 ui-unsaved-machine = The config was edited. Switching the machine drops the edits.
+ui-unsaved-open = The config was edited. Opening a file drops the edits.
 ui-unsaved-close = The config was edited. Closing the window drops the edits.
 ui-unsaved-save = Save
 ui-unsaved-discard = Discard

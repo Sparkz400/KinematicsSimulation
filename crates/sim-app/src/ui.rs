@@ -779,13 +779,13 @@ pub enum Answer {
 }
 
 /// The question over everything else, while a switch of machine or the closing of the window waits for the answer.
-/// `closing` words it for the window.
-pub fn unsaved(ctx: &egui::Context, model: &Model, closing: bool, actions: &mut Vec<Action>) {
+/// `message` is the key of its wording for what is waiting.
+pub fn unsaved(ctx: &egui::Context, model: &Model, message: &str, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     let shown = egui::Modal::new("unsaved".into()).show(ctx, |ui| {
         ui.set_width(340.0);
         ui.heading(tr("ui-unsaved-title"));
-        ui.label(tr(if closing { "ui-unsaved-close" } else { "ui-unsaved-machine" }));
+        ui.label(tr(message));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             for (key, answer) in [
@@ -2191,7 +2191,7 @@ fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
     // Each name over its field: flowed in a row, a label wrapped to the end of the line before its field and read as
     // the name of the field before it.
     // Each also from the catalogue's articles that fit what is named before it: the supply's motors and drives, the
-    // motor's gearboxes. Typing stays. (The belt has no list to offer.)
+    // motor's gearboxes. Typing stays; a belt of another width than the list's is typed (it is interpolated).
     let (motor_name, supply_name) = (inputs.parts[0].clone(), inputs.parts[1].clone());
     let keys = [
         "ui-parts-motor",
@@ -2210,17 +2210,13 @@ fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
                 1 => SUPPLIES.iter().map(|s| s.to_string()).collect(),
                 2 => catalog::gearboxes_for_motor(&motor_name, ""),
                 3 => catalog::drives_for(&supply_name).into_iter().map(|(name, ..)| name.to_string()).collect(),
-                5 => catalog::axis_names(),
-                _ => Vec::new(),
+                4 => catalog::belt_names(),
+                _ => catalog::axis_names(),
             }
         };
         ui.horizontal(|ui| {
-            let listed = i != 4;
-            let room = if listed { (ui.available_width() - 110.0).max(60.0) } else { f32::INFINITY };
-            ui.add(TextEdit::singleline(&mut *field).desired_width(room));
-            if listed {
-                catalogue_list(ui, model, key, field, articles);
-            }
+            ui.add(TextEdit::singleline(&mut *field).desired_width((ui.available_width() - 110.0).max(60.0)));
+            catalogue_list(ui, model, key, field, articles);
         });
     }
     if ui.button(tr("ui-parts-apply")).clicked() {

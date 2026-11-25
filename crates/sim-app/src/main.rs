@@ -103,9 +103,11 @@ struct State {
 }
 
 /// What would drop the config's edits and so asks first.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Ask {
     Machine(&'static sim_core::MachineEntry),
+    /// A config or machine file to open, named when the question is asked: the file field changes with a save.
+    Open(String),
     Close,
 }
 
@@ -274,7 +276,9 @@ fn settings_of(state: &State) -> Settings {
         rpm: Some(model.units.rpm),
         mm: Some(model.units.mm),
         speed: Some(model.speed),
-        config_file: Some(model.inputs.config_file.clone()),
+        // The file opened or saved to, not the field: a JSON machine file is reopened too, and a path typed but not
+        // opened is none.
+        config_file: Some(model.file.clone()),
         machine: Some(model.entry.id.to_string()),
     }
 }
@@ -1522,8 +1526,13 @@ fn panels(
             actions.push(Action::Undo);
         }
     }
-    if let Some(ask) = state.ask {
-        ui::unsaved(ctx, &state.model, matches!(ask, Ask::Close), &mut actions);
+    if let Some(ask) = &state.ask {
+        let key = match ask {
+            Ask::Machine(_) => "ui-unsaved-machine",
+            Ask::Open(_) => "ui-unsaved-open",
+            Ask::Close => "ui-unsaved-close",
+        };
+        ui::unsaved(ctx, &state.model, key, &mut actions);
     }
 
     for action in actions {
@@ -1534,19 +1543,20 @@ fn panels(
             Action::Undo => model.undo(),
             Action::Redo => model.redo(),
             Action::Answer(answer) => {
-                let Some(ask) = state.ask else { continue };
+                let Some(ask) = state.ask.clone() else { continue };
                 let go = match answer {
                     ui::Answer::Cancel => {
                         state.ask = None;
                         false
                     }
                     ui::Answer::Discard => true,
-                    ui::Answer::Save => save_first(state),
+                    ui::Answer::Save => save_first(state, matches!(ask, Ask::Open(_))),
                 };
                 if go {
                     state.ask = None;
                     match ask {
                         Ask::Machine(entry) => switch_machine(state, entry),
+                        Ask::Open(path) => open_file(state, &path),
                         Ask::Close => {
                             exit.write(AppExit::Success);
                         }
@@ -1665,14 +1675,11 @@ fn panels(
             Action::RunView(kind) => model.views.start(kind, model.entry, &model.config, &model.inputs),
             Action::OpenConfig(dialog) => {
                 if let Some(path) = config_path(model, dialog, false) {
-                    model.open_config(&path);
-                    // Forget the drawn parts, so the camera frames the machine as the file sets it up (another machine,
-                    // where the file is of one).
-                    state.part_ids.clear();
-                    state.panels.part = None;
-                    forget_run(state);
-                    go_live(state);
-                    state.recorded.clear();
+                    if model.dirty() {
+                        state.ask = Some(Ask::Open(path));
+                    } else {
+                        open_file(state, &path);
+                    }
                 }
             }
             Action::SaveConfig(dialog) => {
@@ -1712,13 +1719,28 @@ fn switch_machine(state: &mut State, entry: &'static sim_core::MachineEntry) {
     state.recorded.clear();
 }
 
+/// Opens the config or machine file `path`, forgetting the drawn parts so that the camera frames the machine as the
+/// file sets it up (another machine, where the file is of one).
+fn open_file(state: &mut State, path: &str) {
+    state.model.open_config(path);
+    state.part_ids.clear();
+    state.panels.part = None;
+    forget_run(state);
+    go_live(state);
+    state.recorded.clear();
+}
+
 /// The config goes to the file the field names, or to one the dialog is asked for where the field is empty, before
-/// what would drop it goes on. Whether it does: not when the dialog is cancelled (the question stays), nor when the
-/// file cannot be written (the question goes, with the reason among the messages).
-fn save_first(state: &mut State) -> bool {
+/// what would drop it goes on. With `opening` the field holds the file about to be opened, so the config goes to the
+/// file it was last opened from or saved to instead (the dialog where there is none, or a JSON file). Whether it
+/// does: not when the dialog is cancelled (the question stays), nor when the file cannot be written (the question
+/// goes, with the reason among the messages).
+fn save_first(state: &mut State, opening: bool) -> bool {
     let model = &mut state.model;
-    let named = !model.inputs.config_file.is_empty();
-    let Some(path) = config_path(model, !named, true) else { return false };
+    let target = if opening { model.save_target() } else { Some(model.inputs.config_file.clone()) };
+    let Some(path) = target.filter(|t| !t.is_empty()).or_else(|| config_path(model, true, true)) else {
+        return false;
+    };
     model.save_config(&path);
     if !model.dirty() {
         return true;

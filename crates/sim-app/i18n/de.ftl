@@ -103,6 +103,7 @@ ui-modified = geändert
 ui-modified-hint = Die Konfiguration weicht von der Datei oder dem Standard der Maschine ab, aus der sie stammt. Speichern Sie sie, sonst geht sie beim Wechsel der Maschine oder beim Schließen des Fensters verloren.
 ui-unsaved-title = Ungespeicherte Änderungen
 ui-unsaved-machine = Die Konfiguration wurde bearbeitet. Beim Wechsel der Maschine gehen die Änderungen verloren.
+ui-unsaved-open = Die Konfiguration wurde bearbeitet. Beim Öffnen einer Datei gehen die Änderungen verloren.
 ui-unsaved-close = Die Konfiguration wurde bearbeitet. Beim Schließen des Fensters gehen die Änderungen verloren.
 ui-unsaved-save = Speichern
 ui-unsaved-discard = Verwerfen
