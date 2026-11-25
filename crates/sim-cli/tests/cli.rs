@@ -2369,9 +2369,11 @@ fn a_drive_condition_on_a_hand_entered_drive_is_refused() {
     let text_of = entry.default_config.replacen("[ratings]\n", "[ratings]\ndrive_altitude_m = 1000.0\n", 1);
     std::fs::write(&file, text_of).unwrap();
     let config = file.to_str().unwrap();
-    let named = cli(&["verdicts", entry.id, "--config", config, "--motor", "1FK2104-5AK", "--drive", "6SL3210-5HE11-5UF0"]);
+    let named =
+        cli(&["verdicts", entry.id, "--config", config, "--motor", "1FK2104-5AK", "--drive", "6SL3210-5HE11-5UF0"]);
     let table = text(&named.stdout);
-    let row = table.lines().find(|l| l.starts_with("drive-current,")).unwrap_or_else(|| panic!("{}", text(&named.stderr)));
+    let row =
+        table.lines().find(|l| l.starts_with("drive-current,")).unwrap_or_else(|| panic!("{}", text(&named.stderr)));
     assert_eq!(row.split(',').nth(3), Some("5.000"));
     let hand = cli(&["verdicts", entry.id, "--config", config]);
     std::fs::remove_file(&file).unwrap();

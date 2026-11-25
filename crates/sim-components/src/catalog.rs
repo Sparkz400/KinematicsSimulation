@@ -2725,13 +2725,21 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
         let ids: Vec<String> = ids.unwrap_or_default();
         ids.iter()
             .map(|id| {
-                [part_of(cfg, id, "motor", job.article), part_of(cfg, id, "gearbox", &gearbox), part_of(cfg, id, "drive", &drive)]
+                [
+                    part_of(cfg, id, "motor", job.article),
+                    part_of(cfg, id, "gearbox", &gearbox),
+                    part_of(cfg, id, "drive", &drive),
+                ]
             })
             .collect()
     } else {
         let id = job.motor.as_str();
         let own = |key: &str, candidate: &str, config: &str| or(candidate, &part_of(cfg, id, key, config));
-        vec![[job.article.to_string(), own("gearbox", &job.gearbox, shared.gearbox), own("drive", job.drive, shared.drive)]]
+        vec![[
+            job.article.to_string(),
+            own("gearbox", &job.gearbox, shared.gearbox),
+            own("drive", job.drive, shared.drive),
+        ]]
     };
     // The gearbox the candidate's motor drives through (the shared one where several take it).
     let gearbox = match &trains[..] {
