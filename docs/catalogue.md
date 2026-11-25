@@ -59,7 +59,7 @@ The search's column `estimated` (`catalog::estimated_data`) names what a motor a
 
 ### What stands in for the price
 
-No file has a price. Siemens' list prices are in its Industry Mall, which refuses automated access (HTTP 403), and none of the catalogues read here prints one; Festo's and Bahr's are not public. The search ranks by installed weight instead: `cost_kg` = number of motors × (motor without brake + gearbox) + the axis at the config's strokes (where one of the catalogue is tried). Weight goes roughly with size and so with price within a family; across makers and families it does not, which is why this is a stand-in and called so. The drive's weight is not counted (the converter files have none).
+No file has a price. Siemens' list prices are in its Industry Mall, which refuses automated access (HTTP 403), and none of the catalogues read here prints one; Festo's and Bahr's are not public. The search ranks by installed weight instead: `cost_kg` = number of motors × (motor without brake + gearbox) + the axis at the config's strokes (where one of the catalogue is tried). Weight goes roughly with size and so with price within a family; across makers and families it does not, which is why this is a stand-in and called so. The drive's weight is not counted (the converter files have none). Prices can only come from the user: `search --prices FILE` reads a list of the user's own (see [the user guide](user-guide.md#find-the-lightest-motor)).
 
 ## Files
 

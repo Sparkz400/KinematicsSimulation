@@ -323,6 +323,19 @@ The search runs every motor of the catalogue that is offered at the supply on th
 
 **Cost.** No catalogue file has a price, and Siemens publishes no list prices on a server that can be read automatically (its Industry Mall refuses such access). The installed weight stands in for the price: `cost_kg` is motor and gearbox times the number of motors that take the candidate (not those with a motor of their own, `[motor.<id>]` or `[parts.<id>]`), plus the axis where one of the catalogue is tried (`--axes`). Passing candidates are ranked by it, then by `mass_kg`. For a motor search on a fixed machine the two give the same order.
 
+**Your own prices.** Weight is a stand-in; a price list of your own replaces it ([why no shipped table has prices](catalogue.md#what-stands-in-for-the-price)). Write a CSV with the header `part_number,price`, one part per line, `#` notes and blank lines allowed, and give it as `--prices FILE`. The part numbers are the strings the table prints in its columns `motor`, `gearbox`, `drive` and `axis`; the price is a positive number in whatever currency you use (the file carries none and the program prints none). A candidate's `price` is the sum over its motor, gearbox, drive and axis, each times how many of it the machine takes (three motors buy three of the motor, the gearbox and the drive), and exists only where every part is in your list. With `--prices` the default ranking becomes `--rank-by price` (priced passing candidates first, cheapest first, ties in the weight order; unpriced ones after them), the table gets a `price` column beside `cost_kg` (empty where there is none), and the error stream says how many candidates have no price and names up to ten part numbers to add. A duplicate part number, a price that is not a positive number or a missing header is refused with file and line. `--rank-by price` is also a criterion for mixes (`price=1,energy=0.5`), but a mix cannot place a candidate without a price, so it is refused while a passing one has none; without `--prices` it is refused too.
+
+```text
+$ cat prices.csv
+part_number,price
+# EUR, supplier quote of March
+1FK2104-6AF,900
+6SL3210-5HE11-0UF0,200
+$ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2104-6AF --prices prices.csv
+```
+
+(The EXCT-30 has two motors, each with its drive: 2 × 900 + 2 × 200 = 2200 in the `price` column of the 1FK2104-6AF's row, beside its 6.80 in `cost_kg`.)
+
 | Option | Effect |
 | --- | --- |
 | `--series PREFIX` | Only article numbers that start this way, e.g. `1FK2`, `1FT2105`, `1FK7`, `AM804` or `AKM2G` |
@@ -330,6 +343,7 @@ The search runs every motor of the catalogue that is offered at the supply on th
 | `--supply 230v`, `400v` or `s120` | `230v` and `400v`: the S210 motors ([`motors_s210.csv`](../catalog/siemens/motors_s210.csv)) at that supply, each with the S210 converter the D 32 catalogue lists beside it (at 230 V the single-phase one where there is one). `s120`: the motors on a SINAMICS S120 at 400 V, the 1FK7 and 1FT7 of [`motors_s120.csv`](../catalog/siemens/motors_s120.csv) with a data sheet and the 1FK2 and 1FT2 of their S120 manuals, each with its Single Motor Module (see [parts by name](#check-a-real-catalogue-machine)). `s210new-230v`, `s210new-400v`: the S210 motors with the new 6SL5310 converters D 32 lists beside them. `<vendor>-<volts>v` (e.g. `beckhoff-400v`, `kollmorgen-240v`): another maker's motors at that line voltage, each with the drive the maker pairs it with, or where the maker publishes no pairing the smallest of its drives that carries the motor's stall current ([the catalogue](catalogue.md#other-makers)). Default `400v` |
 | `--gearboxes SERIES` | Also try each motor with every gearbox of that series (`NRB`, `NRK`, `NLC`, or a size such as `NRK070`) that fits its frame and has a ratio between half and twice the config's; on a direct drive (ratio 1) between half and twice the classic optimum for that motor, beside the motor without a gearbox (see [which drive works best](#which-drive-works-best-rank-mix-sweep-and-compare)). Only for the motors the series is made for |
 | `--axes` | Also try every axis of the catalogue of the machine's kind (below) |
+| `--prices FILE` | Your price list, `part_number,price` (see "Your own prices" above): adds the column `price`, ranks by it by default, and allows `--rank-by price` |
 | `--motor-id ID` | Size one motor of a machine with several, a machine file's motor `ID`: each candidate becomes `[parts.ID]`, the other motors stay as the file has them, that motor's own velocity gain is retuned, `--gearboxes` fits its own ratio, and `cost_kg` is that one motor's weight (see [machine files](machine-files.md#motors-that-differ)). Not with `--axes` |
 
 | Column | Meaning |
@@ -340,6 +354,7 @@ The search runs every motor of the catalogue that is offered at the supply on th
 | `vendor`, `supply` | The maker and the supply the motor was tried at (`siemens` for `230v`, `400v`, `s120`, `s210new-*`) |
 | `mass_kg` | Mass of the motor without brake and of its gearbox (Siemens' configuration manual 01/2023, see [the catalogue](catalogue.md)) |
 | `cost_kg` | The stand-in for the price: installed weight, see above |
+| `price` | Only with `--prices`: your price for the candidate's parts, empty where one of them is not in your list |
 | `result` | `ok` if every verdict passes |
 | `tightest_check` | The check closest to its limit, or furthest beyond it. Two DC link checks are left out while they pass, because their ratio says nothing about the margin: `dc-link-energy` when a braking resistor is in use (the capacitors then fill to their limit by design) and `dc-link-overvoltage` (the voltage is never below the DC link's own level). The belt's slack counts once it fails (a pushed section: `inf`). With `--motor-id` only that motor's checks count, and the whole machine's where they fail. For a candidate that was not simulated: why (`config`, a cycle error, `axis-stroke`, `axis-payload`, `axis-speed`) |
 | `tightest_utilisation` | Value over limit of that check |
@@ -431,7 +446,7 @@ The search above answers "which is the lightest motor that passes". The same sea
 | `estimated` | What the motor and drive leave to the config's estimates (empty: everything from the catalogue): `motor-winding` (no phase resistance and inductance; Siemens prints them for the 1FK7 and 1FT7 only), `motor-thermal-time`, `motor-pole-pairs`, `motor-standstill` and `motor-rated` (another maker prints no standstill or no rated values; the other ones stand for them), `drive-max-current` (no peak current printed: Mitsubishi), `drive-base-load` (no base load current: every drive but the S120 Motor Modules) |
 | `u_<check>` | One column per check of any candidate: its utilisation, value over limit (for a life, limit over value), the highest of the motors. Empty where a candidate has no such check |
 
-**Rank by what matters.** `--rank-by` orders the passing candidates by `cost` (the default), `margin` (the tightest check's utilisation), `energy`, `error` (following error), `thermal`, `inertia` (inertia ratio) or `drive` (the drive's rated current), or by a weighted mix such as `--rank-by cost=1,energy=0.5`: each figure over the best one of the passing candidates, times its weight, summed, so that kilograms and joules weigh as the weights say. Failing candidates follow as before.
+**Rank by what matters.** `--rank-by` orders the passing candidates by `cost` (the default), `margin` (the tightest check's utilisation), `energy`, `error` (following error), `thermal`, `inertia` (inertia ratio), `drive` (the drive's rated current) or `price` (your price list, `--prices`; the default with it), or by a weighted mix such as `--rank-by cost=1,energy=0.5`: each figure over the best one of the passing candidates, times its weight, summed, so that kilograms and joules weigh as the weights say. Failing candidates follow as before.
 
 **The drive as a dimension.** `--drives neighbours` tries each motor with the drive the catalogue pairs with it and with the next size down and up by rated output current: among the S210 converters of the supply (at 230 V the 1 AC and 3 AC ones, at 400 V the 3 AC ones), the S120 Single Motor Modules, or the maker's drives at the line voltage. `--drives all` tries every drive of the supply. A smaller drive is judged against its own currents (`drive-current`, `drive-peak-current`) and, with effects.drive_current_limit, limits the simulated current. On the EXCT-30 the 1FK2204-5AF runs on the 6SL3210-5HE10-4UF0 (1.2 A) at 0.998 of its rated current, on its paired 5HE10-8UF0 (2.3 A) at 0.52:
 

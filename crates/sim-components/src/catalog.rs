@@ -1829,6 +1829,12 @@ pub struct Candidate {
     /// names, kg. Motor and gearbox times the number of motors that take it (not those with a motor of their own,
     /// `[motor.<id>]` or `[parts.<id>]`; one for `search_motor`), and the axis at the config's strokes.
     pub cost: f64,
+    /// The parts the combination buys, as the search's table spells them: motor, gearbox, drive (each once per motor
+    /// that takes it, as `cost` counts them) and axis, with how many of each; the part a config keeps is named too.
+    /// Empty for an axis ruled out before any motor was tried.
+    pub parts: Vec<(String, f64)>,
+    /// The user's price for `parts` (`apply_prices`); `None` without a price list or where a part has no price in it.
+    pub price: Option<f64>,
     /// The cycle and its verdicts; `None` where the cycle was not run, with the reason in `refused`. With a duty mix
     /// (`Options::duties`) the first duty's cycle and the verdicts of the mix (`search::mix_verdicts`).
     pub result: Option<(CycleLoad, Vec<Verdict>)>,
@@ -2417,6 +2423,53 @@ pub fn rank(found: &mut [Candidate]) {
     });
 }
 
+/// The user's prices by part number (`--prices`): a CSV `part_number,price` with the header, `#` notes and blank lines
+/// passed over as the catalogue's tables are. The currency is the user's; the file carries none. No shipped table has
+/// a price (`docs/catalogue.md`).
+pub struct PriceList(HashMap<String, f64>);
+
+impl PriceList {
+    /// Reads the text; on a fault the line (1-based), the message key and the argument it names (the part number or
+    /// the field), for the front end to put in words.
+    pub fn parse(text: &str) -> Result<Self, (usize, &'static str, String)> {
+        let mut lines = text.lines().enumerate().filter(|(_, l)| !l.starts_with('#') && !l.trim().is_empty());
+        let (at, header) = lines.next().unwrap_or((0, ""));
+        if header.split(',').map(str::trim).ne(["part_number", "price"]) {
+            return Err((at + 1, "cli-error-prices-header", header.to_string()));
+        }
+        let mut prices = HashMap::new();
+        for (i, line) in lines {
+            let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+            let [part, price] = fields[..] else { return Err((i + 1, "cli-error-prices-fields", line.to_string())) };
+            if part.is_empty() {
+                return Err((i + 1, "cli-error-prices-fields", line.to_string()));
+            }
+            let price = price.parse::<f64>().ok().filter(|p| *p > 0.0 && p.is_finite());
+            let price = price.ok_or_else(|| (i + 1, "cli-error-prices-value", format!("{part}: {}", fields[1])))?;
+            if prices.insert(part.to_string(), price).is_some() {
+                return Err((i + 1, "cli-error-prices-duplicate", part.to_string()));
+            }
+        }
+        Ok(Self(prices))
+    }
+}
+
+/// Sets each candidate's price (`Candidate::price`): the sum over its parts of the count times the list's price, only
+/// where every part has one. Returns the part numbers the list lacks, each once, in order of first need.
+pub fn apply_prices(found: &mut [Candidate], list: &PriceList) -> Vec<String> {
+    let mut missing: Vec<String> = Vec::new();
+    for c in found {
+        c.price = c.parts.iter().map(|(name, count)| list.0.get(name).map(|p| p * count)).sum::<Option<f64>>();
+        c.price = c.price.filter(|_| !c.parts.is_empty());
+        for (name, _) in c.parts.iter().filter(|(name, _)| !list.0.contains_key(name)) {
+            if !missing.contains(name) {
+                missing.push(name.clone());
+            }
+        }
+    }
+    missing
+}
+
 /// A job's config made from a duty's config `base`: the axis named, then the parts put in as `with_named` (or, for one
 /// motor, `with_motor_part`) puts them; and how many motors take the shared motor (1 for one motor's job).
 fn job_config(entry: &MachineEntry, base: &Config, supply: &str, job: &Job) -> Result<(Config, f64), ConfigError> {
@@ -2472,8 +2525,17 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
     let (with_parts, motors) = job_config(entry, cfg, supply, job).ok()?;
     // The gearbox the motor drives through: the candidate's, else its own (`[parts.<id>]` for one motor).
     let own = if job.motor.is_empty() { Ok(cfg.clone()) } else { motor_config(cfg, &job.motor) };
-    let own_gearbox = own.ok().and_then(|own| Some(Parts::of(&own).ok()?.gearbox.to_string())).unwrap_or_default();
+    let own = own.ok();
+    let own_parts = own.as_ref().and_then(|own| Parts::of(own).ok());
+    let own_gearbox = own_parts.as_ref().map(|p| p.gearbox.to_string()).unwrap_or_default();
     let gearbox = if job.gearbox.is_empty() { own_gearbox.as_str() } else { job.gearbox.as_str() };
+    let drive = if job.drive.is_empty() { own_parts.as_ref().map_or("", |p| p.drive) } else { job.drive };
+    // What the combination buys, for a price list: every motor that takes the shared parts has its own of each.
+    let parts = [(job.article, motors), (gearbox, motors), (drive, motors), (job.axis.as_str(), 1.0)]
+        .into_iter()
+        .filter(|(name, _)| !name.is_empty())
+        .map(|(name, count)| (name.to_string(), count))
+        .collect();
     // An unknown mass counts 0 (not NaN, which sorted the row last); `estimated` says so ("gearbox-mass").
     let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(0.0) };
     let mass = motor_mass_for(cfg, job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
@@ -2486,6 +2548,7 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
         motor: job.motor.clone(),
         mass,
         cost: motors * mass + job.axis_weight,
+        parts,
         ..Candidate::default()
     };
     // Every duty of the mix, with the same parts; the first is the config searched on.
