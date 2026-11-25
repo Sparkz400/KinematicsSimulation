@@ -19,7 +19,8 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   server's own parser cannot read is refused before the core reads it; on Python 3.10, which has no TOML parser of
   its own, any TOML text that holds `_file` or an escape is refused.
 - The optimiser's refusal of a cycle that fails as configured has a message of its own ("The cycle as configured
-  already fails: ..."), no longer "Configuration value is out of range".
+  already fails: ..."), no longer "Configuration value is out of range", and names the failing checks by their labels,
+  each once (a linear motor's speed in m/s), in the app and at the command line.
 - The web page's plain wheel scrolls the page; Ctrl + wheel (or a trackpad pinch) zooms the 3D view and the plots. On
   touch a vertical swipe scrolls past the view.
 - The app's window title is "Kinematics Simulation"; its speed slider goes up to 10.
@@ -31,8 +32,10 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   per analysis.
 - `sim-cli --version` and `-V`; `sim-cli help`, `help COMMAND` and `COMMAND --help` (one command to a line, a command's
   options, the topics `options`, `paths`, `units`); a usage error names the command's help in one line.
-- Config errors at the command line name the nearest key of a misspelt one and show the value that is out of range
-  (not yet the range it must lie in).
+- Config errors at the command line name the nearest key of a misspelt one and show the value that is out of range,
+  with the limit it broke wherever a shared reader refused it (above 0, not negative, finite and at most 1e15), in the
+  machine, the drive model and the analyses; a check made elsewhere shows the value, a machine file's node path
+  neither.
 - Long analyses can be watched and stopped: `Progress`, `with_progress` and `Cancelled` in `sim_components::analysis`
   (every batch of runs counts into the job and stops taking runs once it is cancelled; a run already started is
   finished), `Job` and `Cancelled` in the Python module, a progress bar and a Cancel button for the app's long
@@ -46,10 +49,13 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   "modified" mark and a Save / Discard / Cancel question before a machine switch or closing the window drops edits;
   language, theme, units, speed and the last config file are remembered between starts (`settings.toml` in the
   user's config folder, `SIM_APP_SETTINGS` for another file); the Parameters tab has a filter, the config path on
-  hover, a list of the values changed from the default and catalogue drop-downs for motor, supply, gearbox, drive
-  and axis.
+  hover, a list of the values changed from the default and catalogue drop-downs for motor, supply, gearbox, drive,
+  axis and belt. Opening a config or machine file over unsaved edits asks first too; its Save writes the file the
+  config was last opened from or saved to (the file dialog where there is none or it was a JSON machine file), never
+  the one being opened. A JSON machine file is reopened at the next start.
 - Web page: Shift + drag or a right or middle drag pans, a double click or "Fit" fits the view again, "+" and "−"
-  zoom; on touch a sideways swipe turns the machine and two fingers pinch and pan.
+  zoom; on touch a sideways swipe turns the machine, and two fingers pinch, pan sideways and tilt (their vertical
+  movement) without scrolling the page.
 
 ### Fixed
 
