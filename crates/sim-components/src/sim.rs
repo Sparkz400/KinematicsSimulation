@@ -591,6 +591,7 @@ impl Sim {
     ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let points = self.control.plan_path(self.machine.as_ref(), pieces, time_optimal)?;
         if time_optimal
+            && !self.obstacles.is_empty()
             && let Some(check) = self.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>())
             && (check.clearance < self.min_clearance || check.contact.is_some())
         {
@@ -608,6 +609,7 @@ impl Sim {
     ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let points = self.control.plan_program(self.machine.as_ref(), runs, time_optimal)?;
         if time_optimal
+            && !self.obstacles.is_empty()
             && let Some(check) = self.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>())
             && (check.clearance < self.min_clearance || check.contact.is_some())
         {
@@ -617,14 +619,12 @@ impl Sim {
     }
 
     /// The path through `poses` checked against the obstacles before it runs, with the payload as it is now
-    /// (`collision::check_path`). `None` without obstacles.
+    /// (`collision::check_path`), and the machine's own parts against each other (`PlanCheck::own`). `None` without
+    /// obstacles where nothing of the machine's own was checked.
     pub fn check_plan(&self, poses: &[Vec<f64>]) -> Option<crate::collision::PlanCheck> {
-        if self.obstacles.is_empty() {
-            return None;
-        }
-        let mut check = crate::collision::PlanCheck::default();
+        let mut check = crate::collision::PlanCheck::keeping(self.min_clearance);
         crate::collision::check_path(self.machine.as_ref(), &self.obstacles, poses, &mut check);
-        Some(check)
+        (!self.obstacles.is_empty() || check.own.is_some()).then_some(check)
     }
 
     /// How far that planned path is from the pieces as given, at most.

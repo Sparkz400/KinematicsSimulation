@@ -442,7 +442,7 @@ fn start(args: &Args, tr: &Translations) -> Result<Sim, Failure> {
         }
         _ => None,
     };
-    tell_plan(tr, planned);
+    tell_plan(tr, planned, sim.min_clearance);
     if let Some(command) = command {
         sim.command(command).map_err(|e| Failure(e.key, String::new()))?;
     }
@@ -513,12 +513,32 @@ fn tell_start(tr: &Translations, change: Option<f64>, repeat: Option<f64>) {
 }
 
 /// On the error stream: the least clearance of a planned path to the obstacles, in mm, and its first pose in contact.
-/// Nothing without obstacles.
-fn tell_plan(tr: &Translations, check: Option<sim_components::collision::PlanCheck>) {
+/// Nothing without obstacles. Then, apart from it, the least clearance between the machine's own parts that are not
+/// joined, in mm, which two and at which pose, and (when it is below the clearance or a contact) that it fails; nothing
+/// where the machine has no two parts to look at.
+fn tell_plan(tr: &Translations, check: Option<sim_components::collision::PlanCheck>, limit: f64) {
+    use sim_components::collision::Body;
     let Some(check) = check else { return };
-    eprintln!("{}", tr.tr_arg("cli-planned-clearance", &format!("{:.1}", check.clearance * 1e3)));
-    if let Some(pose) = check.contact {
-        eprintln!("{}", tr.tr_arg("cli-planned-contact", &pose_text(&pose)));
+    if check.nearest.is_some() {
+        eprintln!("{}", tr.tr_arg("cli-planned-clearance", &format!("{:.1}", check.clearance * 1e3)));
+    }
+    if let Some(pose) = &check.contact {
+        eprintln!("{}", tr.tr_arg("cli-planned-contact", &pose_text(pose)));
+    }
+    if let Some(own) = &check.own {
+        let name = |body: Body| match body {
+            Body::Box(i) => tr.tr_arg("cli-part-box", &(i + 1).to_string()),
+            Body::Capsule(i) => tr.tr_arg("cli-part-capsule", &(i + 1).to_string()),
+        };
+        let detail = format!(
+            "{:.1} mm, {} / {}, {}",
+            own.clearance * 1e3,
+            name(own.bodies[0]),
+            name(own.bodies[1]),
+            pose_text(&own.pose)
+        );
+        let key = if check.own_fails(limit) { "cli-planned-own-fails" } else { "cli-planned-own" };
+        eprintln!("{}", tr.tr_arg(key, &detail));
     }
 }
 
@@ -1641,7 +1661,8 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let motors = (entry.build)(&cfg)?.motors().to_vec();
     // A path's clearance is in its run's verdict "collision"; the configured cycle's is told here.
     if args.option("--path").is_none() {
-        tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?);
+        let limit = cfg.non_negative("profile.min_clearance_m")?;
+        tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?, limit);
     }
     let cfg = path_instead(args, entry, cfg)?;
     if args.flag("--worst") {

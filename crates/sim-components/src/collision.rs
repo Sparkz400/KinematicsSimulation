@@ -82,20 +82,175 @@ pub fn nearest(bodies: &Bodies, obstacles: &[Obstacle]) -> Option<(usize, ([f64;
         .min_by(|a, b| a.1.2.total_cmp(&b.1.2))
 }
 
+/// One of the machine's own parts, by its place among `Machine::collision_bodies` (a box) or
+/// `Machine::self_collision_capsules` (a capsule), counted from 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Body {
+    Box(usize),
+    Capsule(usize),
+}
+
+/// The least clearance between two of the machine's own parts that are not joined along a path: m (negative in an
+/// overlap), the two parts, and the first pose at it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelfClearance {
+    pub clearance: f64,
+    pub bodies: [Body; 2],
+    pub pose: Vec<f64>,
+}
+
+/// Which pairs of parts are joined (not checked) for a pose with `counts` boxes and capsules: `joined[i * n + j]`.
+#[derive(Debug, Clone, PartialEq)]
+struct Joined {
+    counts: (usize, usize),
+    joined: Vec<bool>,
+    /// Whether any pair is left to check.
+    open: bool,
+}
+
 /// What a path keeps from the obstacles before it runs: the least clearance along it (m, infinite without obstacles),
 /// the first pose at which a part of the machine touches one (clearance 0 or less), and the first pose at the least
-/// clearance (`None` without obstacles).
+/// clearance (`None` without obstacles). `own` is the least clearance between the machine's own parts that are not
+/// joined (`Machine::connected_bodies`), a figure apart from the obstacles'; `None` where nothing was checked (fewer
+/// than two parts, or all of them joined), which is not the same as clear.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanCheck {
     pub clearance: f64,
     pub contact: Option<Vec<f64>>,
     pub nearest: Option<Vec<f64>>,
+    pub own: Option<SelfClearance>,
+    /// Parts closer than this at the first pose are taken as joined where the machine does not say (`profile.min_clearance_m`).
+    join_below: f64,
+    joins: Option<Joined>,
 }
 
 impl Default for PlanCheck {
     fn default() -> Self {
-        Self { clearance: f64::INFINITY, contact: None, nearest: None }
+        Self { clearance: f64::INFINITY, contact: None, nearest: None, own: None, join_below: 0.0, joins: None }
     }
+}
+
+impl PlanCheck {
+    /// A check that takes parts of the machine closer than `clearance` at the first pose as joined.
+    pub fn keeping(clearance: f64) -> Self {
+        Self { join_below: clearance, ..Self::default() }
+    }
+
+    /// Whether the machine's own parts came nearer than `limit` (`profile.min_clearance_m`) or touched: as the check
+    /// "collision" judges the obstacles, a contact fails whatever the limit. Not checked is not failed.
+    pub fn own_fails(&self, limit: f64) -> bool {
+        self.own.as_ref().is_some_and(|own| own.clearance < limit || own.clearance <= 0.0)
+    }
+
+    /// The machine's own parts at `state` (its boxes `boxes`): the least clearance of the pairs not joined, if it is
+    /// below the least so far. Linear in the samples: a lower bound from the parts' extents spares most pairs, and no
+    /// pair allocates.
+    fn look_at_own(&mut self, machine: &dyn Machine, state: &[f64], boxes: &[Aabb], pose: &[f64]) {
+        let capsules = machine.self_collision_capsules(state);
+        let connected = || machine.connected_bodies(state, boxes.len(), capsules.len());
+        self.look_at_parts(boxes, &capsules, connected, pose);
+    }
+
+    /// `look_at_own` for parts given: `connected` tells the joined pairs of these parts where the machine knows them
+    /// (`Machine::connected_bodies`), asked once for each number of boxes and capsules.
+    pub fn look_at_parts(
+        &mut self,
+        boxes: &[Aabb],
+        capsules: &[Capsule],
+        connected: impl FnOnce() -> Option<Vec<(usize, usize)>>,
+        pose: &[f64],
+    ) {
+        let (n, counts) = (boxes.len() + capsules.len(), (boxes.len(), capsules.len()));
+        if n < 2 {
+            return;
+        }
+        if self.joins.as_ref().is_none_or(|j| j.counts != counts) {
+            self.joins = Some(joined(connected(), boxes, capsules, self.join_below));
+        }
+        let Some(joins) = self.joins.as_ref().filter(|j| j.open) else { return };
+        let mut best = self.own.as_ref().map_or(f64::INFINITY, |own| own.clearance);
+        let mut found = None;
+        for i in 0..n {
+            for j in i + 1..n {
+                if joins.joined[i * n + j] {
+                    continue;
+                }
+                let (a, b) = (part(boxes, capsules, i), part(boxes, capsules, j));
+                let bound = a.lower_bound(&b);
+                // Extents that overlap say nothing about the parts: only apart ones can be spared.
+                if bound > 0.0 && bound >= best {
+                    continue;
+                }
+                let gap = a.gap(&b);
+                if gap < best {
+                    (best, found) = (gap, Some((i, j)));
+                }
+            }
+        }
+        if let Some((i, j)) = found {
+            let body = |k: usize| if k < boxes.len() { Body::Box(k) } else { Body::Capsule(k - boxes.len()) };
+            self.own = Some(SelfClearance { clearance: best, bodies: [body(i), body(j)], pose: pose.to_vec() });
+        }
+    }
+}
+
+/// A part of the machine as a box or a capsule.
+#[derive(Clone, Copy)]
+enum Part<'a> {
+    Box(&'a Aabb),
+    Capsule(&'a Capsule),
+}
+
+fn part<'a>(boxes: &'a [Aabb], capsules: &'a [Capsule], i: usize) -> Part<'a> {
+    if i < boxes.len() { Part::Box(&boxes[i]) } else { Part::Capsule(&capsules[i - boxes.len()]) }
+}
+
+impl Part<'_> {
+    fn extent(&self) -> ([f64; 3], [f64; 3]) {
+        match self {
+            Part::Box(b) => b.extent(),
+            Part::Capsule(c) => c.extent(),
+        }
+    }
+
+    /// The distance of the two parts' extents: no more than their clearance where they are apart.
+    fn lower_bound(&self, other: &Part) -> f64 {
+        let ((lo, hi), (other_lo, other_hi)) = (self.extent(), other.extent());
+        (0..3).map(|i| (lo[i] - other_hi[i]).max(other_lo[i] - hi[i]).max(0.0).powi(2)).sum::<f64>().sqrt()
+    }
+
+    fn gap(&self, other: &Part) -> f64 {
+        match (self, other) {
+            (Part::Box(a), Part::Box(b)) => a.gap(b).2,
+            (Part::Capsule(c), Part::Box(b)) | (Part::Box(b), Part::Capsule(c)) => c.gap(b).2,
+            (Part::Capsule(a), Part::Capsule(b)) => a.gap_capsule(b),
+        }
+    }
+}
+
+/// The pairs of parts not to check against each other: those the machine names (`Machine::connected_bodies`), or else
+/// those that touch, overlap or lie closer than `below` to each other now.
+fn joined(named: Option<Vec<(usize, usize)>>, boxes: &[Aabb], capsules: &[Capsule], below: f64) -> Joined {
+    let n = boxes.len() + capsules.len();
+    let mut joined = vec![false; n * n];
+    match named {
+        Some(pairs) => {
+            for (i, j) in pairs.into_iter().filter(|(i, j)| *i < n && *j < n) {
+                (joined[i * n + j], joined[j * n + i]) = (true, true);
+            }
+        }
+        None => {
+            for i in 0..n {
+                for j in i + 1..n {
+                    let gap = part(boxes, capsules, i).gap(&part(boxes, capsules, j));
+                    let together = gap < below || gap <= 0.0;
+                    (joined[i * n + j], joined[j * n + i]) = (together, together);
+                }
+            }
+        }
+    }
+    let open = (0..n).any(|i| (i + 1..n).any(|j| !joined[i * n + j]));
+    Joined { counts: (boxes.len(), capsules.len()), joined, open }
 }
 
 /// Adds the path through `poses` to `check`: straight from pose to pose, looked at every millimetre (every
@@ -104,7 +259,9 @@ pub fn check_path(machine: &dyn Machine, obstacles: &[Obstacle], poses: &[Vec<f6
     let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
     let mut at = |pose: &[f64]| {
         machine.equilibrium(pose, &mut state, &mut torque);
-        let gap = nearest(&Bodies::of(machine, &state), obstacles).map_or(f64::INFINITY, |(_, (_, _, gap))| gap);
+        let bodies = Bodies::of(machine, &state);
+        let gap = nearest(&bodies, obstacles).map_or(f64::INFINITY, |(_, (_, _, gap))| gap);
+        check.look_at_own(machine, &state, &bodies.boxes, pose);
         if gap < check.clearance {
             (check.clearance, check.nearest) = (gap, Some(pose.to_vec()));
         }
@@ -135,8 +292,9 @@ fn check_passes(
     obstacles: &[Obstacle],
     conveyor: &mut Conveyor,
     start: &[f64],
+    limit: f64,
 ) -> PlanCheck {
-    let mut check = PlanCheck::default();
+    let mut check = PlanCheck::keeping(limit);
     let axes = machine.axes().to_vec();
     let reachable = |pose: &[f64]| crate::control::in_range(&*machine, pose);
     let mut passes = Vec::new();
@@ -174,18 +332,40 @@ fn check_passes(
 /// target with the payload attached (as the controller starts), then each segment from the target before it with the
 /// payload as that one left it, and round from the last to the first again. A segment with via points takes the path
 /// the planner times through them; the straight moves are taken as lines, which corner blending would cut short (the
-/// simulation itself is checked as it runs). `None` without obstacles. With `[conveyor]` the passes are checked
-/// instead (`check_passes`).
+/// simulation itself is checked as it runs). The machine's own parts are checked against each other along the way
+/// (`PlanCheck::own`, with `profile.min_clearance_m` as the distance under which parts at the start pose are joined).
+/// `None` without obstacles where the machine has no two parts to check (or the cycle cannot be read: then it is
+/// not checked, where with obstacles it is an error). With `[conveyor]` the passes are checked instead
+/// (`check_passes`).
 pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanCheck>, ConfigError> {
     let cfg = &crate::catalog::resolve(entry, cfg)?;
     let obstacles = obstacles(cfg)?;
-    if obstacles.is_empty() {
-        return Ok(None);
+    match cycle_check(entry, cfg, &obstacles) {
+        Ok(check) => Ok((!obstacles.is_empty() || check.own.is_some()).then_some(check)),
+        Err(_) if obstacles.is_empty() => Ok(None),
+        Err(e) => Err(e),
     }
+}
+
+/// Whether the machine has two parts to check against each other at `start`, with the payload on or off.
+fn has_two_parts(machine: &mut dyn Machine, start: &[f64]) -> bool {
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+    [true, false].into_iter().any(|attached| {
+        machine.set_payload_attached(attached);
+        machine.equilibrium(start, &mut state, &mut torque);
+        machine.collision_bodies(&state).len() + machine.self_collision_capsules(&state).len() >= 2
+    })
+}
+
+fn cycle_check(entry: &MachineEntry, cfg: &Config, obstacles: &[Obstacle]) -> Result<PlanCheck, ConfigError> {
     let mut machine = (entry.build)(cfg)?;
     let start = crate::sim::start_pose(cfg, machine.as_ref())?;
+    let limit = cfg.non_negative("profile.min_clearance_m")?;
+    if obstacles.is_empty() && !has_two_parts(machine.as_mut(), &start) {
+        return Ok(PlanCheck::default());
+    }
     if let Some(mut conveyor) = crate::conveyor::Conveyor::from_config(cfg, machine.axes().len())? {
-        return Ok(Some(check_passes(machine.as_mut(), &obstacles, &mut conveyor, &start)));
+        return Ok(check_passes(machine.as_mut(), obstacles, &mut conveyor, &start, limit));
     }
     let (cycle, tolerance) = (
         cfg.positive("profile.cycle_s")?,
@@ -217,8 +397,8 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
         let corner = segment.get("corners_m").and_then(number);
         segments.push((target, payload, via.map(|v| (v, corner)), i));
     }
-    let mut check = PlanCheck::default();
-    check_path(machine.as_ref(), &obstacles, std::slice::from_ref(&start), &mut check);
+    let mut check = PlanCheck::keeping(limit);
+    check_path(machine.as_ref(), obstacles, std::slice::from_ref(&start), &mut check);
     let n = segments.len();
     // Leg k ends at segment k; leg n is the way round from the last segment to the first.
     for k in (0..=n).filter(|_| n > 0) {
@@ -240,7 +420,83 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
                 std::iter::once(from).chain(planned.into_iter().map(|(_, pose)| pose)).collect()
             }
         };
-        check_path(machine.as_ref(), &obstacles, &poses, &mut check);
+        check_path(machine.as_ref(), obstacles, &poses, &mut check);
     }
-    Ok(Some(check))
+    Ok(check)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cube(x: f64) -> Aabb {
+        Aabb { centre: [x, 0.0, 0.0], size: [0.1; 3] }
+    }
+
+    /// Two 0.1 m cubes, the second first 0.2 m clear of the first (x = 0.3: faces at 0.05 and 0.25) and then at
+    /// x = 0.103 (faces at 0.05 and 0.053): 3 mm apart. With 5 mm kept the 3 mm fails and names both boxes, the 0.2 m
+    /// before it does not; with 2 mm kept the 3 mm passes. Fails if the pair is not looked at, or is judged without the
+    /// limit.
+    #[test]
+    fn two_boxes_3_mm_apart_fail_a_clearance_of_5_mm_and_name_both() {
+        let mut check = PlanCheck::keeping(0.005);
+        check.look_at_parts(&[cube(0.0), cube(0.3)], &[], || None, &[0.3]);
+        let own = check.own.clone().unwrap();
+        assert!((own.clearance - 0.2).abs() < 1e-12 && !check.own_fails(0.005), "{own:?}");
+        check.look_at_parts(&[cube(0.0), cube(0.103)], &[], || None, &[0.103]);
+        let own = check.own.clone().unwrap();
+        assert!((own.clearance - 0.003).abs() < 1e-12, "{own:?}");
+        assert_eq!((own.bodies, own.pose), ([Body::Box(0), Body::Box(1)], vec![0.103]));
+        assert!(check.own_fails(0.005) && !check.own_fails(0.002));
+    }
+
+    /// The same two cubes but named as joined: nothing is left to check, which says "not checked", not "clear".
+    #[test]
+    fn joined_parts_are_skipped_and_leave_the_check_not_made() {
+        let mut check = PlanCheck::keeping(0.005);
+        check.look_at_parts(&[cube(0.0), cube(0.3)], &[], || Some(vec![(1, 0)]), &[0.3]);
+        check.look_at_parts(&[cube(0.0), cube(0.103)], &[], || panic!("asked again for the same parts"), &[0.1]);
+        assert_eq!(check.own, None);
+        assert!(!check.own_fails(0.005));
+    }
+
+    /// One part, none, or a part and nothing else: not checked, whatever the pose.
+    #[test]
+    fn fewer_than_two_parts_are_not_checked() {
+        let mut check = PlanCheck::keeping(0.005);
+        check.look_at_parts(&[cube(0.0)], &[], || None, &[0.0]);
+        check.look_at_parts(&[], &[], || None, &[0.0]);
+        assert_eq!(check.own, None);
+    }
+
+    /// Without a say of the machine, parts that touch or lie closer than the clearance at the first pose are joined: two
+    /// cubes 3 mm apart from the start are not reported at 3 mm (the rule cannot see them). Fails if the first pose
+    /// does not join.
+    #[test]
+    fn parts_in_contact_at_the_first_pose_are_taken_as_joined() {
+        let mut check = PlanCheck::keeping(0.005);
+        check.look_at_parts(&[cube(0.0), cube(0.103)], &[], || None, &[0.0]);
+        check.look_at_parts(&[cube(0.0), cube(0.101)], &[], || None, &[1.0]);
+        assert_eq!(check.own, None);
+        // Overlapping ones join with no clearance asked for as well.
+        let mut check = PlanCheck::default();
+        check.look_at_parts(&[cube(0.0), cube(0.05)], &[], || None, &[0.0]);
+        assert_eq!(check.own, None);
+    }
+
+    /// A capsule along x from the origin to (1, 0, 0), radius 0.01, and one along y through x = 0.5 at height 0.05,
+    /// radius 0.02: the segments cross 0.05 m apart in z, so the clearance is 0.05 - 0.01 - 0.02 = 0.02. A 0.1 m cube at
+    /// (0.5, 0.5, 0.5) has its lowest face at z = 0.45: 0.45 - 0.01 = 0.44 m from the first capsule and 0.4 - 0.02 =
+    /// 0.38 m from the second, so the capsules are the nearest pair.
+    #[test]
+    fn capsules_and_boxes_are_judged_by_their_surfaces() {
+        let along_x = Capsule { from: [0.0; 3], to: [1.0, 0.0, 0.0], radius: 0.01 };
+        let along_y = Capsule { from: [0.5, -1.0, 0.05], to: [0.5, 1.0, 0.05], radius: 0.02 };
+        let high = Aabb { centre: [0.5, 0.5, 0.5], size: [0.1; 3] };
+        let mut check = PlanCheck::default();
+        check.look_at_parts(&[high], &[along_x, along_y], || Some(Vec::new()), &[0.0]);
+        let own = check.own.unwrap();
+        assert!((own.clearance - 0.02).abs() < 1e-12, "{own:?}");
+        assert_eq!(own.bodies, [Body::Capsule(0), Body::Capsule(1)]);
+    }
 }
