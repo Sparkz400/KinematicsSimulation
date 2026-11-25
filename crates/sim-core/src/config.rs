@@ -213,6 +213,11 @@ impl Config {
     /// is close (at most 2 edits, or a third of the path's length); for a value out of range or of the wrong type the
     /// value the path has.
     pub fn hint(&self, error: &ConfigError) -> Option<ConfigHint> {
+        // A float as Rust writes it: 1e300, where TOML's text spells out all 301 digits.
+        let shown = |value: &Value| match value {
+            Value::Float(f) if f.is_finite() => format!("{f:?}"),
+            other => other.to_string(),
+        };
         match error {
             ConfigError::Missing(path) | ConfigError::Unknown(path) => {
                 let near = path.chars().count().div_ceil(3).max(2);
@@ -221,10 +226,10 @@ impl Config {
                 (distance > 0 && distance <= near).then_some(ConfigHint::Nearest(nearest))
             }
             ConfigError::Bounded(bound, path) => {
-                self.get(path).ok().map(|value| ConfigHint::Bounded(value.to_string(), *bound))
+                self.get(path).ok().map(|value| ConfigHint::Bounded(shown(value), *bound))
             }
             ConfigError::Invalid(path) | ConfigError::Type(path) => {
-                self.get(path).ok().map(|value| ConfigHint::Value(value.to_string()))
+                self.get(path).ok().map(|value| ConfigHint::Value(shown(value)))
             }
             _ => None,
         }
@@ -307,7 +312,7 @@ mod tests {
         assert_eq!(hint(c.positive("neg")), Some(ConfigHint::Bounded("-5.5".into(), Bound::Positive)));
         assert_eq!(hint(c.positive("zero")), Some(ConfigHint::Bounded("0.0".into(), Bound::Positive)));
         assert_eq!(hint(c.non_negative("neg")), Some(ConfigHint::Bounded("-5.5".into(), Bound::NonNegative)));
-        assert!(matches!(hint(c.f64("big")), Some(ConfigHint::Bounded(_, Bound::Number))));
+        assert_eq!(hint(c.f64("big")), Some(ConfigHint::Bounded("1e20".into(), Bound::Number)));
         let refused = c.positive("neg").unwrap_err();
         assert_eq!((refused.key(), refused.detail()), ("error-config-invalid", "neg"));
         assert_eq!(refused, ConfigError::Invalid("neg".into()));
