@@ -2516,6 +2516,11 @@ pub(crate) mod tests {
     }
 
     #[test]
+        // The bandwidth is the -3 dB width, as Siemens' f_3dB = 2 D f (damping D = 20 / 120): by hand, the edges of
+        // (s² + w0²) / (s² + 2 D w0 s + w0²) are at 10 ± sqrt(10² + 60²) Hz, 50.83 and 70.83 Hz, gain 1 / sqrt 2.
+        for edge in [50.83, 70.83] {
+            assert!((gain_at(edge) - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.01, "{edge} Hz: {}", gain_at(edge));
+        }
     fn a_drive_starts_holding_its_load() {
         let mut p = params();
         p.torque_ff = 1.0;
