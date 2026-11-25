@@ -88,6 +88,8 @@ const TABLES: &[(&str, &str)] = &tables![
     "yaskawa/motor_shafts.csv",
     "hiwin/ball_screws.csv",
     "hiwin/linear_guides.csv",
+    "rexroth/linear_guides.csv",
+    "thk/linear_guides.csv",
     "siemens/linear_motors_1fn3.csv",
     "beckhoff/linear_motors_al8000.csv",
     "festo/belt_axes_egc.csv",

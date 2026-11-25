@@ -1,0 +1,63 @@
+schema_version = 1
+class = "linear_guide"
+key = ["part_number"]
+default_source = "rexroth-bshp"
+notes = '''
+Source: Bosch Rexroth AG, "Ball rail systems, High Precision BSHP", R999000485/2025-11: the dimension and rating
+tables of the ball runner blocks made of steel, one double page per block type, printed pages 51 to 73 (standard
+blocks of sizes 15 to 45: FNS 51, FLS 53, FKS 55, SNS 57, SLS 59, SKS 61, SNH 63, SLH 65, FNN 67, FKN 69, SNN 71,
+SKN 73) and 75 to 85 (heavy-duty blocks of sizes 55 and 65: FNS 75, FLS 77, SNS 79, SLS 81, SNH 83, SLH 85); the rail
+mass of the standard steel rails, page 113. Extracted by catalog/tools/extract_rexroth_guides.py; the numbers are
+Rexroth's, the layout is ours.
+One row per block type and size, the block without ball chain. Rexroth sells by a material number composed of the
+  options (preload class, accuracy class, seal), so no single article number belongs to a row: part_number is the
+  block type's code as the catalogue prints it (FNS, FLS, FKS flange; SNS, SLS, SKS, SNH, SLH slimline; FNN, FKN, SNN,
+  SKN low) with the size, e.g. FNS25. series: BSHP. size: the rail size (15 to 65).
+  Left out: the values with ball chain (printed on the overview, pages 12 to 14, as a second set), the high speed,
+  super, aluminium, Resist NR/CR, wide (BNS) and compact (CNS) blocks and the other rail types.
+carriage_type: block type, flange or slimline, length (normal, long, short), height (standard, high, low).
+rail_width: A2; height: H, the assembly height from the bottom of the rail to the top of the block; carriage_length:
+  B (printed "B+0.5"); all mm as printed.
+dynamic_load_rating: C in N as printed, for a travel of 100 000 m: "Determination of the dynamic load capacities and
+  load moments is based on a travel of 100,000 m according to DIN ISO 14728-1. Often only 50,000 m are actually
+  stipulated. For comparison: Multiply the values C, Mt and ML by 1.26" (the footnote of every table, e.g. page 51).
+  dynamic_load_rating_distance_m = 100000 on every row, so the values are NOT on HIWIN's and THK's 50 km basis: the
+  simulator converts a rating by the cube root of the distances where it takes it (C for 50 km = 1.26 times C).
+static_load_rating: C0 in N.
+static_moment_x: Mt0, "static torsional moment load capacity", about the x-axis (the roll); static_moment_y and _z:
+  ML0, "static longitudinal moment load capacity", about "the transverse axis y or the vertical axis z" (page 20):
+  Rexroth prints ONE ML0 for pitch and yaw, so both columns carry it. dynamic_moment_x: Mt, dynamic_moment_y and _z:
+  ML, N m, on the same 100 km basis as C (Rexroth prints dynamic moments; HIWIN and THK print none).
+carriage_mass: m in kg as printed (the table's own number of decimals); rail_mass: kg/m of the standard steel rail
+  (page 113; the same for every block type of a size).
+seal_drag and friction_force and preload_class: not given per model (seal friction only as a diagram of displacement
+  resistance, preload as classes C0 to C3 and no force); empty.
+Numbers print with a space as thousands separator ("9 860"); the script reads each row in the one way that makes the
+  static value of every pair 1 to 3 times the dynamic one and stops where there is not exactly one.
+Sizes: slimline high blocks and low blocks exist in fewer sizes (SNH 15, 25 to 45 and 55; SLH 25 to 45 and 55;
+  FNN, FKN, SNN, SKN 20 and 25); the heavy-duty tables hold sizes 55 and 65 only for FNS, FLS, SNS and SLS.
+Printed as is: SLS 55 and 65 print the mass with one decimal (4.8, 9.8).
+'''
+
+[[sources]]
+id = "rexroth-bshp"
+document = "Bosch Rexroth AG, Ball rail systems, High Precision BSHP, R999000485/2025-11"
+date = "2025-11"
+locator = "dimension and rating tables pages 51 to 73 (standard blocks) and 75 to 85 (heavy-duty blocks, sizes 55 and 65); basis of C (100,000 m) in each table's footnote; moments defined on page 20"
+method = "script:tools/extract_rexroth_guides.py"
+url = "https://www.boschrexroth.com/media/ec1fd87f-8f69-4a5e-9596-e3f0089bc0f9"
+retrieved = "2026-11-25"
+
+[[sources]]
+id = "rexroth-bshp-rails"
+document = "Bosch Rexroth AG, Ball rail systems, High Precision BSHP, R999000485/2025-11"
+date = "2025-11"
+locator = "page 113, standard ball guide rails made of steel, SNS/SNO with cover strip and strip clamps, column Mass m (kg/m)"
+method = "script:tools/extract_rexroth_guides.py"
+url = "https://www.boschrexroth.com/media/ec1fd87f-8f69-4a5e-9596-e3f0089bc0f9"
+retrieved = "2026-11-25"
+
+[[provenance]]
+rows = ["*"]
+fields = ["rail_mass_kg_m"]
+source = "rexroth-bshp-rails"

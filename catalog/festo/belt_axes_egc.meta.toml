@@ -18,6 +18,7 @@ max_speed_m_s, max_acceleration_m_s2, repeatability_m: "Max. speed" [m/s], "Max.
 fy/fz/mx/my/mz_dynamic: "Max. permissible forces and torques at reference service life" (5000 km), at the slide
   surface; "must not be exceeded during dynamic operation". My and Mz are printed once as "Mymax./Mzmax." for
   GK/GP; both columns hold that value. No static values are printed.
+dynamic_load_distance_m: 5000 km (5000000 m), the travel the loads above are rated for.
 mass_at_zero_stroke_kg: "Basic weight with 0 mm stroke" [g], including slide, GK/GP. mass_per_stroke_kg_m: "Additional
   weight per 10 mm stroke" [g]. moved_mass_x_kg: "Moving mass" [g], GK/GP.
 belt_pitch_m, belt_width_m, pulley_effective_diameter_m, feed_per_rev_m: table "Toothed belt", "Pitch", "Width",

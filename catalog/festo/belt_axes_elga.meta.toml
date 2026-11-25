@@ -3,9 +3,11 @@ class = "belt_axis"
 key = ["series", "size"]
 default_source = "elga_tb_2026"
 notes = '''
-Festo toothed belt axes ELGA-TB-KF (recirculating ball bearing guide) and ELGA-TB-G (plain-bearing guide), single
-axes with a cover strip: one row per series and size, the standard slide. Source: Festo catalogue "Toothed belt axes
-ELGA-TB", 2026/02: ELGA-TB-KF pages 13 to 16, ELGA-TB-G pages 83 and 84 ("Datasheet").
+Festo toothed belt axes ELGA-TB-KF (recirculating ball bearing guide), -KF-F1 (the same for the food zone), -RF
+(roller bearing guide), -RF-F1 (roller bearing guide, food zone) and ELGA-TB-G (plain-bearing guide), single axes with
+a cover strip: one row per series and size, the standard slide. Source: Festo catalogue "Toothed belt axes
+ELGA-TB", 2026/02: ELGA-TB-KF pages 13 to 16, -KF-F1 pages 32 to 34, -RF pages 49 to 51, -RF-F1 pages 66 to 68,
+ELGA-TB-G pages 83 and 84 ("Datasheet").
 Extracted by tools/extract_festo_egc.py; the numbers are the catalogue's, the layout is ours.
 kind: axis (a single axis, as the Bahr axes in bahr/belt_axes.csv).
 stroke_x_min_m, stroke_x_max_m: "Working stroke" [mm].
@@ -15,6 +17,11 @@ max_pulley_torque_nm: "Max. driving torque" [Nm].
 max_speed_m_s, max_acceleration_m_s2, repeatability_m: "Max. speed" [m/s], "Max. acceleration" [m/s2],
   "Repetition accuracy" [mm] (+- value); one value printed across all sizes. ELGA-TB-G: at higher speeds the wear on
   the guide increases.
+dynamic_load_distance_m: the travel the fy/fz/mx/my/mz_dynamic are rated for, as the sheet's heading prints it: 5000 km
+  (5000000 m) for KF and KF-F1, 10000 km (10000000 m) for RF and RF-F1, empty for G (its sheet states no life). The
+  loads of RF are therefore NOT on KF's basis and nothing here converts them: Festo prints the 5000 km values of
+  RF nowhere (only the 10000 km ones, and the 100 km ones for comparison with ISO and JIS ratings of other makers),
+  and a guide's load for a longer life is the lower one.
 fy/fz/mx/my/mz_dynamic: ELGA-TB-KF "Max. permissible forces and torques for a service life of 5000 km", at the centre
   of the guide (the slide surface is "Dimension x" 37/50/70/86 mm above it, not extracted); ELGA-TB-G "Permissible
   forces and torques", at the slide surface, for at most 0.5 m/s and a pause longer than 5 s. Both "must not be
@@ -30,8 +37,14 @@ pulley_teeth: not printed; the feed constant over the pitch, both printed (a who
 belt_material: of the standard belt (ELGA-...); the option -PU2 is polyurethane with steel cord and nylon cover.
 Not printed and empty: belt profile name, belt width (this catalogue gives none), continuous feed force, static
   loads, fx loads, max_length_one_piece.
-Not extracted: ELGA-TB-KF-F1, ELGA-TB-RF and ELGA-TB-RF-F1 (same catalogue; not in this task), the slide variants
-  ZL/ZR, mass moments of inertia (no schema column), displacement encoder, graphs, dimensions, order codes.
+RF and RF-F1 print a row per slide (ELGA-..., -S short, -L long) for stroke, weights and My/Mz, and RF a further row
+  ELGA-...T8 (the low temperature option) for feed force, torque and no-load torque: the row is the standard slide
+  ELGA-... (the first), the others are not extracted. The food zone variants have a polyurethane belt with steel
+  cord, and the printed elongation is that belt's (belt_material says so); -KF-F1 has the load values of -KF.
+  RF: max. speed 10 m/s (the others 5).
+Not extracted: ELGC-TB (another family: its sheet prints units inside the cells and merged values that can be read
+  only by guessing), the slide variants ZL/ZR and -S/-L/T8 of RF, mass moments of inertia (no schema column),
+  displacement encoder, graphs, dimensions, order codes.
 No misprints found.
 '''
 
@@ -39,7 +52,7 @@ No misprints found.
 id = "elga_tb_2026"
 document = "Festo, catalogue \"Toothed belt axes ELGA-TB\", English"
 date = "2026-02"
-locator = "ELGA-TB-KF: pages 13 (general technical data, weight, toothed belt) and 16 (load values); ELGA-TB-G: pages 83 and 84"
+locator = "ELGA-TB-KF: pages 13 (general technical data, weight, toothed belt) and 16 (load values); -KF-F1: pages 32 to 34; -RF: pages 49 to 51; -RF-F1: pages 66 to 68; ELGA-TB-G: pages 83 and 84"
 method = "script:tools/extract_festo_egc.py"
 url = "https://ftp.festo.com/Public/PNEUMATIC/SOFTWARE_SERVICE/Documentation/2026/EN/ELGA-TB_EN.PDF"
 retrieved = "2026-11-14"
