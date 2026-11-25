@@ -1648,7 +1648,8 @@ fn a_motor_is_picked_from_the_catalogue_list() {
 fn a_belt_is_picked_from_the_catalogue_list() {
     let mut d = Driver::new();
     d.tab("ui-config");
-    let belt = sim_components::catalog::belt_names().into_iter().find(|name| name.starts_with("AT5-")).unwrap();
+    // The first: the list scrolls after a dozen, and a row out of sight cannot be clicked.
+    let belt = sim_components::catalog::belt_names()[0].clone();
     let lists = d.in_region(SETUP, Role::ComboBox);
     let list = lists.get(4).expect("the belt's list");
     d.click_at(Vec2::new(list.rect.center().x, list.rect.center().y));
