@@ -754,6 +754,45 @@ fn a_drag_on_a_parameter_changes_it() {
     assert!(now / old > 1.2 && now / old < 1.45, "{path}: {old} to {now}");
 }
 
+/// A message that arrives during a drag (the strip on top of the panel appears) does not end the drag: the field keeps
+/// following the pointer. Half the drag, a message, the other half: the second half changes the value as much again.
+#[test]
+fn a_message_during_a_drag_does_not_end_it() {
+    let mut d = Driver::new();
+    d.tab("ui-parameters");
+    let groups = d.state().model.param_groups();
+    let group = d.tr(&groups[0].key);
+    d.click(Role::Button, &group);
+    let (path, old) = groups[0]
+        .params
+        .iter()
+        .find_map(|(path, _, value)| value.as_float().map(|v| (path.clone(), v)))
+        .expect("a number in the first group");
+    let is_field = |w: &Widget| w.role == Role::SpinButton && w.value.parse::<f64>().ok() == Some(old);
+    d.find_where("the group's first number", is_field);
+    d.settle();
+    let at = d.find_where("the group's first number", is_field).rect.center();
+    let from = Vec2::new(at.x, at.y);
+    d.move_to(from);
+    d.button(MouseButton::Left, ButtonState::Pressed);
+    for i in 1..=10 {
+        d.move_to(from + Vec2::new(4.0 * i as f32, 0.0));
+    }
+    d.wait("the first half taken", |d| d.state().model.config.f64(&path).ok() != Some(old));
+    let half = d.state().model.config.f64(&path).unwrap();
+    assert!(d.messages().is_empty(), "{:?}", d.messages());
+    d.state_mut().model.messages.push(("ui-job-cancelled", String::new()));
+    d.frames(2);
+    for i in 11..=20 {
+        d.move_to(from + Vec2::new(4.0 * i as f32, 0.0));
+    }
+    d.button(MouseButton::Left, ButtonState::Released);
+    d.frames(2);
+    let end = d.state().model.config.f64(&path).unwrap();
+    // 40 more pixels at one percent of the value each: some 40 % on top of the first half's value.
+    assert!(end / half > 1.25, "{path}: {old}, {half} after the first half, {end} at the end");
+}
+
 #[test]
 fn an_effect_switch_reaches_the_config_and_stays() {
     let mut d = Driver::new();

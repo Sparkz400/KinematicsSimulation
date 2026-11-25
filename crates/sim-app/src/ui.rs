@@ -826,6 +826,12 @@ fn history_row(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
 /// What the app has to say (a file that could not be read, a refused value, a job that ended), newest first, on every
 /// tab: it is of what was done on whichever one. Many of them scroll, and the count says how many there are.
 fn messages(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+    // In a scope of its own whether there are messages or not: the widgets below keep their ids when the first message
+    // comes, so a drag on one of them goes on (with the strip drawn straight into `ui` it ended).
+    ui.push_id("messages-strip", |ui| messages_strip(ui, model, actions));
+}
+
+fn messages_strip(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     if model.messages.is_empty() {
         return;
     }
