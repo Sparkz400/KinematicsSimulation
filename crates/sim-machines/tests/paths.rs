@@ -354,3 +354,22 @@ fn lines_on_six_axes_are_planned_time_optimal() {
         assert!(end.iter().zip(point(0.75)).all(|(a, b)| (a - b).abs() < 1e-9), "{}: {end:?}", entry.id);
     }
 }
+
+/// A program's reported deviation (`Sim::program_deviations`, what `run --path` and the app say) is planned within the
+/// corner tolerance of each run's G61 or G64 P, as the plan is: `G91 F6000 G64 P0.5`, X100 then Y100, rounds its right
+/// angle 0.5 mm off the two lines (`g61_stops_and_g64_p_rounds_a_corner`), and says so; with G61 the corner is
+/// stopped at and the deviation is nil (below 1 nm).
+#[test]
+fn a_programs_deviation_takes_its_corner_mode() {
+    let entry = file("xyz-portal.toml");
+    let sim = Sim::new(entry, &entry.config()).unwrap();
+    let start = sim.control.planned_pos().to_vec();
+    let deviation = |mode: &str| {
+        let runs =
+            program::read("p.nc", &format!("G91 F6000\n{mode}\nG1 X100\nG1 Y100"), sim.machine.axes(), &start).unwrap();
+        sim.program_deviations(&runs, false).unwrap().into_iter().fold(0.0, f64::max)
+    };
+    let rounded = deviation("G64 P0.5");
+    assert!(rounded > 0.4e-3 && rounded <= 0.5e-3 + 1e-9, "{rounded}");
+    assert!(deviation("G61") < 1e-9);
+}
