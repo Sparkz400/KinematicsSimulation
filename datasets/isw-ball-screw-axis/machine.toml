@@ -395,7 +395,7 @@ torque_feedforward_model = "rigid"
 friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
-# it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
+# it arrives with the motor the speed feedforward moves (S120 p2536 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6

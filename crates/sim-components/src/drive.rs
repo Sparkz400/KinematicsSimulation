@@ -237,7 +237,7 @@ pub struct Precontrol {
     pub machine_friction: bool,
     /// drive.precontrol_balance_s: the position setpoint passes a first-order lag of this time constant before the
     /// position loop compares it, so that it arrives with the motor that the speed precontrol moves through the
-    /// closed speed loop (S120 p1429 balancing); 0 off.
+    /// closed speed loop (S120 p2536 balancing); 0 off.
     pub balance_time: f64,
 }
 

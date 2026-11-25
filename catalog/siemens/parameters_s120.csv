@@ -9,8 +9,8 @@ velocity_filter_s,p1441,Actual speed smoothing time,ms,1000,,printed,lh1-648,PT1
 notch_frequency_hz,p1657,Current setpoint filter 1 type,-,2,constant,printed,lh1-745,2 = general 2nd order filter (1 is a PT2 low pass); filter 1 is switched on with bit 0 of p1656; filters 2 to 4 are p1662 to p1676
 notch_frequency_hz,p1658,Current setpoint filter 1 denominator natural frequency,Hz,1,,printed,lh1-745,Notch centre
 notch_frequency_hz,p1660,Current setpoint filter 1 numerator natural frequency,Hz,1,,printed,lh1-746,The same centre in numerator and denominator makes a bandstop filter
-notch_bandwidth_hz,p1659,Current setpoint filter 1 denominator damping,-,1,notch_damping,derived,lh1-746,D = bandwidth / (2 x centre) from the manual's f_3dB = 2 x D x f_notch (page 744); the simulator's bandwidth is the -3 dB width of a second order notch
-notch_bandwidth_hz,p1661,Current setpoint filter 1 numerator damping,-,0,zero,derived,lh1-746,Numerator damping 0 suppresses the centre completely as the simulator's notch does (page 744)
+notch_bandwidth_hz,p1659,Current setpoint filter 1 denominator damping,-,1,notch_damping,derived,lh1-746,D = bandwidth / (2 x centre) from the manual's f_3dB = 2 x D x f_notch (page 745); the simulator's bandwidth is the -3 dB width of a second order notch
+notch_bandwidth_hz,p1661,Current setpoint filter 1 numerator damping,-,0,zero,derived,lh1-746,Numerator damping 0 suppresses the centre completely as the simulator's notch does (page 745)
 peak_torque_nm,p1520,CO: Torque limit upper/motoring,Nm,1,,printed,lh1-689,At the motor shaft; the drive's limit is constant where the simulator's falls with the torque-speed curve
 peak_torque_nm,p1521,CO: Torque limit lower/regenerative,Nm,-1,,derived,lh1-690,The lower limit is negative
 max_speed_rad_s,p1082,Maximum speed,rpm,9.549296585513721,,printed,lh1-514,60/(2 pi) rpm per rad/s; p1083 and p1086 (210000 rpm as delivered) limit each direction further

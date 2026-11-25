@@ -93,7 +93,7 @@ url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s
 id = "lh1-745"
 document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
 date = "2018-07"
-locator = "parameter entries on page 745 (servo entries); the note on the bandstop and its 3 dB bandwidth is on page 744"
+locator = "parameter entries on page 745 (servo entries); the note on the bandstop and its 3 dB bandwidth is on page 745"
 method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
 url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
 
@@ -101,7 +101,7 @@ url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s
 id = "lh1-746"
 document = "Siemens, SINAMICS S120/S150 List Manual, 07/2018, 6SL3097-5AP00-0BP0 (LH1)"
 date = "2018-07"
-locator = "parameter entries on page 746 (servo entries); the note on the bandstop and its 3 dB bandwidth is on page 744"
+locator = "parameter entries on page 746 (servo entries); the note on the bandstop and its 3 dB bandwidth is on page 745"
 method = "manual: typed in from the entry of the List Manual, the units and ranges as printed"
 url = "https://cache.industry.siemens.com/dl/files/366/109760366/att_961106/v1/s120_s150_lists_man_0718_en-US.pdf"
 
