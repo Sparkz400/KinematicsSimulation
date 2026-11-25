@@ -2481,3 +2481,17 @@ fn tune_exits_1_where_its_targets_are_not_met() {
         assert!(help.contains("tuning") && help.contains("--no-notch"), "{lang}: {help}");
     }
 }
+
+/// `verdicts` says where the machine's own parts are not checked: the screw axis (its payload sits on its carriage, the
+/// two joined, nothing else) has no row "self-collision" and says so on the error stream; the six-axis arm, with links
+/// to compare, has the row and does not.
+#[test]
+fn verdicts_say_where_the_machines_own_parts_are_not_checked() {
+    for (id, checked) in [("screw-axis", false), ("urdf-arm", true)] {
+        let out = cli(&["verdicts", id]);
+        assert_judged(&out);
+        let row = text(&out.stdout).lines().any(|l| l.starts_with("self-collision,"));
+        let said = text(&out.stderr).contains("not checked against each other");
+        assert_eq!((row, said), (checked, !checked), "{id}: {}", text(&out.stderr));
+    }
+}
