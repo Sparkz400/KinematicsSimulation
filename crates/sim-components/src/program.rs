@@ -15,6 +15,12 @@
 //!   stops it, as it does without a feed); G0 runs at the axes' limits;
 //! - X, Y, Z (and A, B, C in degrees) move the axes of the same name (ids x, y, z, a, b, c); the start is where the
 //!   machine stands, an axis a block does not name stays;
+//! - G4 P<seconds> a dwell: the path stops at the end of the move before, stands P seconds (0 to `MAX_DWELL_S`) and goes
+//!   on (RS-274NGC's G4, as LinuxCNC reads it; Siemens' G4 F and Fanuc's P in milliseconds are not read). G61 exact stop
+//!   (corner tolerance 0 from here on), G64 continuous mode (the config's `profile.corner_tolerance_m`) and G64 P<length>
+//!   (that tolerance in the program's unit, G20/G21 apply), as RS-274NGC and LinuxCNC have them (Siemens' G64 takes no
+//!   P). The mode that governs a corner is the one in force for the block after it; a change of mode, like a dwell,
+//!   ends the run, so the corner at the change is stopped at (`Run::corner`, `Run::dwell_s`);
 //! - taken and without effect: N, O, M, S, T words, G40, G49, G54, G80, G94; comments in ( ) and after ;; % lines;
 //!   M2 and M30 end the program. Every other word or G code is refused with its line, and so is an arc that changes the
 //!   plane's third axis (a helix), whose start and end lie at different distances from its centre, or a word for an axis
@@ -58,6 +64,11 @@ pub struct Run {
     pub feed: Option<f64>,
     pub caps: Vec<f64>,
     pub pieces: Vec<Piece>,
+    /// The corner tolerance (m) of the G61 or G64 P in force for the run, `None` for the config's
+    /// (`profile.corner_tolerance_m`).
+    pub corner: Option<f64>,
+    /// A run with no pieces is a dwell (G4): the path stands this long (s) where the run before ended.
+    pub dwell_s: f64,
 }
 
 impl Run {
@@ -67,6 +78,9 @@ impl Run {
             .map(|f| if self.caps.len() == self.pieces.len() { self.caps.clone() } else { vec![f; self.pieces.len()] })
     }
 }
+
+/// The longest dwell (s) a G4 takes: the plan has a pose per profile cycle for it. This simulator's limit.
+pub const MAX_DWELL_S: f64 = 3600.0;
 
 /// A line of a program that cannot be read: its number (from 1), a translation key and the word or detail.
 #[derive(Debug, Clone, PartialEq)]
@@ -104,7 +118,7 @@ pub fn read_with(
         "mod" | "prg" => rapid_with(text, axes, start, orientation_speed),
         _ if text.lines().any(|l| l.trim().to_ascii_lowercase().starts_with("move")) => robot_csv(text, axes, start),
         _ => crate::path::parse(text)
-            .map(|pieces| vec![Run { feed: None, caps: Vec::new(), pieces }])
+            .map(|pieces| vec![Run { feed: None, caps: Vec::new(), pieces, corner: None, dwell_s: 0.0 }])
             .map_err(|line| ProgramError { line: 0, key: "program-error-word", detail: line }),
     }
 }
@@ -182,7 +196,7 @@ fn push_by(runs: &mut Vec<Run>, feed: Option<f64>, piece: Piece, joined: bool) {
                 run.feed = run.feed.map(|g| g.max(f));
             }
         }
-        _ => runs.push(Run { feed, caps: feed.into_iter().collect(), pieces: vec![piece] }),
+        _ => runs.push(Run { feed, caps: feed.into_iter().collect(), pieces: vec![piece], corner: None, dwell_s: 0.0 }),
     }
 }
 
@@ -191,6 +205,9 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
     let mut pos = start.to_vec();
     let (mut absolute, mut inch, mut plane, mut motion, mut feed) = (true, false, 17, None::<u32>, None::<(f64, f64)>);
     let mut runs = Vec::new();
+    // G61 (exact stop: tolerance 0) and G64 (the config's, or its P) as the modal corner tolerance; `split` where the next
+    // move starts a new run, after a change of it or a dwell.
+    let (mut corner, mut split) = (None::<f64>, false);
     for (n, raw) in text.lines().enumerate() {
         let line = n + 1;
         // Comments in brackets and after a semicolon.
@@ -224,10 +241,14 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
         let mut moving = false;
         let mut ends = false;
         let (mut target, mut centre_offset, mut radius) = (pos.clone(), [None::<f64>; 3], None::<f64>);
+        let (mut dwell, mut mode, mut p) = (false, None::<Option<f64>>, None::<(f64, &str)>);
         // Modal words first: units and distances apply to the whole block.
         for &(letter, v, word) in &words {
             if letter == 'G' {
                 match v {
+                    4.0 => dwell = true,
+                    61.0 => mode = Some(Some(0.0)),
+                    64.0 => mode = Some(None),
                     20.0 => inch = true,
                     21.0 => inch = false,
                     90.0 => absolute = true,
@@ -254,11 +275,34 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
                 }
                 'I' | 'J' | 'K' => centre_offset[(letter as u8 - b'I') as usize] = Some(v * length),
                 'R' => radius = Some(v * length),
+                'P' => p = Some((v, word)),
                 _ => return fail(line, "program-error-word", word),
             }
         }
         // A full circle (G2/G3 with I, J, K and no end) moves too.
         moving |= matches!(motion, Some(2 | 3)) && centre_offset.iter().any(Option::is_some);
+        // P is the dwell's seconds (G4) or the corner tolerance in the program's length unit (G64): RS-274NGC's (LinuxCNC);
+        // neither Siemens' G4 F nor Fanuc's G4 P in milliseconds is read.
+        let g64 = words.iter().any(|&(letter, v, _)| letter == 'G' && v == 64.0);
+        match p {
+            None if dwell => return fail(line, "program-error-p", clean),
+            Some((_, word)) if !dwell && !g64 => return fail(line, "program-error-word", word),
+            Some(_) if dwell && (g64 || moving) => return fail(line, "program-error-p", clean),
+            Some((v, _)) if g64 && v >= 0.0 => mode = Some(Some(v * length)),
+            Some((v, _)) if dwell && (0.0..=MAX_DWELL_S).contains(&v) => {}
+            Some(_) => return fail(line, "program-error-p", clean),
+            None => {}
+        }
+        // The mode in force for the block's moves, as RS-274 has it: a corner is governed by the mode of the block that
+        // follows it. A change starts a new run, so the corner at the change is stopped at (a path planned as one has one
+        // tolerance); from G61 to G64 that is where RS-274 would round it.
+        if let Some(m) = mode.filter(|m| *m != corner) {
+            (corner, split) = (m, true);
+        }
+        if let (true, Some((seconds, _))) = (dwell, p) {
+            runs.push(Run { feed: None, caps: Vec::new(), pieces: Vec::new(), corner, dwell_s: seconds });
+            split = true;
+        }
         if moving {
             let Some(kind) = motion else { return fail(line, "program-error-motion", clean) };
             let rate = if kind == 0 {
@@ -274,7 +318,15 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
                 arc_block(line, axes, &pos, &target, plane, kind == 2, centre_offset, radius)?
             };
             for piece in pieces {
-                push_by(&mut runs, rate, piece, true);
+                if std::mem::take(&mut split) {
+                    let caps = rate.into_iter().collect();
+                    runs.push(Run { feed: rate, caps, pieces: vec![piece], corner, dwell_s: 0.0 });
+                } else {
+                    push_by(&mut runs, rate, piece, true);
+                    if let Some(run) = runs.last_mut() {
+                        run.corner = corner;
+                    }
+                }
             }
             pos = target;
         }
@@ -951,14 +1003,54 @@ MoveC,0,0,0.5,0.5,0,0",
     fn unsupported_gcode_is_refused_by_line() {
         let axes = [axis("x"), axis("y"), axis("z")];
         let error = |text: &str| gcode(text, &axes, &[0.0; 3]).unwrap_err();
-        assert_eq!(error("G0 X1\nG4 P1"), ProgramError { line: 2, key: "program-error-word", detail: "G4".into() });
+        assert_eq!(error("G0 X1\nG41"), ProgramError { line: 2, key: "program-error-word", detail: "G41".into() });
         assert_eq!(error("G1 X1").key, "program-error-feed");
         assert_eq!(error("F100\nG2 X10 Y0 Z5 I5").key, "program-error-helix");
         assert_eq!(error("F100\nG2 X10 I3").key, "program-error-arc");
         assert_eq!(gcode("G0 A1", &axes[..2], &[0.0; 2]).unwrap_err().key, "program-error-axis");
         // Comments, line numbers and switching functions pass; M30 ends the program.
         let runs = gcode("%\nN10 G0 X1 (to the side) ; rapid\nM3 S1000\nM30\nG0 X2", &axes, &[0.0; 3]).unwrap();
-        assert_eq!(runs, vec![Run { feed: None, caps: vec![], pieces: vec![Piece::Line(vec![0.001, 0.0, 0.0])] }]);
+        let line = vec![Piece::Line(vec![0.001, 0.0, 0.0])];
+        assert_eq!(runs, vec![Run { feed: None, caps: vec![], pieces: line, corner: None, dwell_s: 0.0 }]);
+    }
+
+    /// G61, G64 and G64 P are modal and each change starts a run, with the tolerance in force for the block that follows
+    /// the corner: G61 is 0, G64 the config's (`None`), G64 P0.5 in mm 0.0005 m and in inch (G20) P0.02 is 0.02 x 0.0254 =
+    /// 0.000508 m. Without a change the moves stay one run.
+    #[test]
+    fn g61_and_g64_set_the_corner_tolerance_by_run() {
+        let axes = [axis("x"), axis("y"), axis("z")];
+        let read = |text: &str| gcode(text, &axes, &[0.0; 3]).unwrap();
+        let corners = |text: &str| read(text).iter().map(|r| (r.corner, r.pieces.len())).collect::<Vec<_>>();
+        assert_eq!(corners("F6000\nG1 X10\nG1 Y10\nG1 X0"), [(None, 3)]);
+        assert_eq!(
+            corners("F6000\nG1 X10\nG1 Y10\nG61\nG1 X0\nG64 P0.5\nG1 Y0\nG1 X5\nG64\nG1 Y5"),
+            [(None, 2), (Some(0.0), 1), (Some(0.0005), 2), (None, 1)]
+        );
+        // The same mode again is no change; the unit of P is the program's.
+        assert_eq!(corners("F6000\nG61\nG1 X10\nG61\nG1 Y10"), [(Some(0.0), 2)]);
+        let inch = read("F100\nG20 G64 P0.02\nG1 X1")[0].corner.unwrap();
+        assert!((inch - 0.000508).abs() < 1e-15, "{inch}");
+        // P with G64 in the block of the move: the mode governs that move.
+        assert_eq!(corners("F6000\nG1 X10\nG64 P1 G1 Y10")[1], (Some(0.001), 1));
+    }
+
+    /// G4 P<s> is a run of its own with no pieces and the time; the moves after it are a run of their own, so the path
+    /// stops before and after it. G4 without P, with a negative P or one beyond an hour, with a move in its block, and
+    /// a P with no G4 or G64 are refused with their line.
+    #[test]
+    fn g4_is_a_dwell_run_and_wrong_p_is_refused() {
+        let axes = [axis("x"), axis("y"), axis("z")];
+        let runs = gcode("F6000\nG1 X10\nG4 P0.5\nG1 X20", &axes, &[0.0; 3]).unwrap();
+        assert_eq!(runs.len(), 3, "{runs:?}");
+        assert_eq!((runs[0].pieces.len(), runs[0].dwell_s), (1, 0.0));
+        assert_eq!((runs[1].pieces.len(), runs[1].dwell_s, runs[1].feed), (0, 0.5, None));
+        assert_eq!((runs[2].pieces.len(), runs[2].dwell_s), (1, 0.0));
+        assert!((runs[2].feed.unwrap() - 0.1).abs() < 1e-12);
+        for text in ["G4", "G4 P-1", "G4 P7200", "G0 X1\nG4 P1 X5", "G4 P1 G64", "G64 P-1"] {
+            assert_eq!(gcode(text, &axes, &[0.0; 3]).unwrap_err().key, "program-error-p", "{text}");
+        }
+        assert_eq!(gcode("G0 X1\nP5", &axes, &[0.0; 3]).unwrap_err().key, "program-error-word");
     }
 
     /// Robot programs: MoveC through (0, 1) from (-1, 0) to (1, 0) is the upper half circle around (0, 0), clockwise as

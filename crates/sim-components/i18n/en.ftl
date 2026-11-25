@@ -223,6 +223,7 @@ param-torque_reserve = Time-optimal path: share of the torque-speed curve used
 param-tension_reserve = Time-optimal path: share of the belt's tension room used
 param-tension_margin_n = Time-optimal path: margin off the belt's tension ratings [N]
 param-time_optimal_margin = Time-optimal path: share of every limit used (1: all)
+param-feed_override = Program: factor on the programmed feed F of G1, G2, G3 and robot moves (1: as programmed)
 optimised-lift = Lift height, segments { $arg } [m]
 optimised-via = Via point of the rounded lift, segments { $arg } [m]
 optimised-fastest = Fastest cycle on the config as written [s]
@@ -615,6 +616,7 @@ program-error-motion = An axis is named before any move (G0, G1, G2, G3): { $arg
 program-error-helix = An arc changes an axis outside its plane (a helix), which the path cannot take: { $arg }
 program-error-arc = An arc cannot be laid out: its start and end are at different distances from its centre, its radius is too small for its ends, its three points lie on one line, or its numbers are too large to compute its centre with. { $arg }
 program-error-named = A move to a named position the program does not declare, or a move without a target: { $arg }
+program-error-p = G4 needs P (a dwell in seconds, 0 to 3600) alone in its block, and G64 takes P as a tolerance that is not negative: { $arg }
 
 # Motor electrical and thermal model (14 November 2026)
 quantity-d-current = d current (field weakening)

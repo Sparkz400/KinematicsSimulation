@@ -38,6 +38,10 @@ fn check_program(name: &str, text: &str) -> Result<(), TestCaseError> {
             for run in &runs {
                 prop_assert!(finite(&run.pieces), "{name}: {run:?}");
                 prop_assert!(run.feed.is_none_or(|f| f.is_finite() && f > 0.0), "{name}: feed {:?}", run.feed);
+                // G4's dwell and G64 P's tolerance are finite, not negative, and a dwell is at most `MAX_DWELL_S`.
+                prop_assert!((0.0..=sim_components::program::MAX_DWELL_S).contains(&run.dwell_s), "{name}: {run:?}");
+                prop_assert!(run.corner.is_none_or(|c| c.is_finite() && c >= 0.0), "{name}: {run:?}");
+                prop_assert!(run.dwell_s == 0.0 || run.pieces.is_empty(), "{name}: a dwell with pieces {run:?}");
             }
         }
     }
