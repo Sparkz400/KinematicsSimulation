@@ -1347,8 +1347,11 @@ fn switching_the_machine_cancels_the_jobs_under_way() {
     model.set_machine(other);
     assert!(analysis.cancel.load(Relaxed) && traces.cancel.load(Relaxed));
     assert!(!model.analysis_running());
-    wait_for_thread_end(&analysis, PATIENCE);
-    wait_for_thread_end(&traces, PATIENCE);
+    // Stopped, not run to their end: a run of the cycle takes well under a second here, and the thousand runs (or the
+    // bounds' traces) uncancelled take minutes.
+    let stopped = Duration::from_secs(60);
+    wait_for_thread_end(&analysis, stopped);
+    wait_for_thread_end(&traces, stopped);
     // The same where another config file replaces the machine's.
     model.set_machine(entry);
     model.run_analysis(Analysis::Cycle);
@@ -1359,7 +1362,36 @@ fn switching_the_machine_cancels_the_jobs_under_way() {
     model.open_config(path.to_str().unwrap());
     std::fs::remove_file(&path).ok();
     assert!(again.cancel.load(Relaxed));
-    wait_for_thread_end(&again, PATIENCE);
+    wait_for_thread_end(&again, stopped);
+}
+
+/// The kinematics comparison tries every catalogue motor on the task (thousands of cycles over the machines); it runs
+/// its candidates on the job's threads, so a cancel stops it once its first runs are done: no candidate starts after.
+#[test]
+fn a_cancelled_kinematics_comparison_stops() {
+    use sim_app::search_views::ViewJob;
+    let job = JobRef::View(ViewJob::Kinematics);
+    let mut model = Model::new(MACHINES[0], "en");
+    model.set_paused(true);
+    model.inputs.search.task_file =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/pick-place-task.toml").to_string();
+    model.views.start(ViewJob::Kinematics, model.entry, &model.config, &model.inputs);
+    let progress = model.job_progress(job).expect("the comparison is running");
+    wait_for_first_run(&mut model, &progress);
+    model.cancel_job(job);
+    model.poll();
+    assert!(!model.views.running(ViewJob::Kinematics), "the model let go of the job");
+    let (done, total) = (progress.done.load(Relaxed), progress.total.load(Relaxed));
+    assert!(done < total, "{done} of {total} runs were done");
+    // The candidates under way end, no new one starts: at most one more per worker thread (on 16 threads 21 of 96 were
+    // done at the cancel and the thread ended 3 s later; uncancelled it runs all 96).
+    wait_for_thread_end(&progress, PATIENCE);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    assert!(
+        progress.done.load(Relaxed) <= done + threads,
+        "{} of {total} done in the end",
+        progress.done.load(Relaxed)
+    );
 }
 
 /// An unstable loop (an absurd position gain) leaves verdict values that are not finite: the app says so, once for the
