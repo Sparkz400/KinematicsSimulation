@@ -72415,7 +72415,7 @@ belt XL-75: error error-config-part-belt XL-75
 belt XL-100: error error-config-part-belt XL-100
 belt XL-150: error error-config-part-belt XL-150
 belt XL-200: error error-config-part-belt XL-200
-axes: ["EXCT-100", "EXCT-15", "EXCT-30", "ELZI-30", "ELZI-40", "ELZI-60", "ELZ-30", "ELZ-40", "ELZ-60", "ELZ-60S", "ELZ-80", "ELZ-80S", "ELZ-100", "ELZ-125", "ELZ-W-60", "ELZ-W-60S", "ELHZ-60", "ELHZ-60S", "ELHZ-80", "ELHZ-80S", "ELHZ-100", "ELHZ-125", "ELSD-40", "ELSD-60", "ELSD-60S", "ELSD-80", "ELSD-80S", "ELSD-100", "ELSZ-30", "ELSZ-40", "ELSZ-60", "ELSZ-60S", "ELSZ-80", "ELSZ-80S", "ELSZ-100", "ELSZ-125", "ELVZ-60", "ELVZ-60S", "ELVZ-80", "ELVZ-80S", "ELVZ-100", "ELVZ-125", "ELZD-W-60", "ELZD-W-60S", "ELZT-40", "ELZT-60", "ELZT-60S", "ELZT-80", "ELZT-80S", "ELZT-100", "ELZZ-60", "ELZZ-60S", "ELZZ-80", "ELZZ-80S", "ELZZ-100", "ELZZ-125", "DLSZ-120", "DLSZ-160", "DLSZ-200", "DLVZ-120", "DLVZ-160", "LLZS-60", "EGC-TB-KF-50", "EGC-TB-KF-70", "EGC-TB-KF-80", "EGC-TB-KF-120", "EGC-TB-KF-185", "ELGA-TB-KF-70", "ELGA-TB-KF-80", "ELGA-TB-KF-120", "ELGA-TB-KF-150", "ELGA-TB-G-70", "ELGA-TB-G-80", "ELGA-TB-G-120", "CKR-070", "CKR-070L", "CKR-090", "CKR-090L", "CKR-110", "CKR-110L", "CKR-145", "CKR-145L", "CKR-200", "CKR-200L", "CKR-280"]
+axes: ["EXCT-100", "EXCT-15", "EXCT-30", "ELZI-30", "ELZI-40", "ELZI-60", "ELZ-30", "ELZ-40", "ELZ-60", "ELZ-60S", "ELZ-80", "ELZ-80S", "ELZ-100", "ELZ-125", "ELZ-W-60", "ELZ-W-60S", "ELHZ-60", "ELHZ-60S", "ELHZ-80", "ELHZ-80S", "ELHZ-100", "ELHZ-125", "ELSD-40", "ELSD-60", "ELSD-60S", "ELSD-80", "ELSD-80S", "ELSD-100", "ELSZ-30", "ELSZ-40", "ELSZ-60", "ELSZ-60S", "ELSZ-80", "ELSZ-80S", "ELSZ-100", "ELSZ-125", "ELVZ-60", "ELVZ-60S", "ELVZ-80", "ELVZ-80S", "ELVZ-100", "ELVZ-125", "ELZD-W-60", "ELZD-W-60S", "ELZT-40", "ELZT-60", "ELZT-60S", "ELZT-80", "ELZT-80S", "ELZT-100", "ELZZ-60", "ELZZ-60S", "ELZZ-80", "ELZZ-80S", "ELZZ-100", "ELZZ-125", "DLSZ-120", "DLSZ-160", "DLSZ-200", "DLVZ-120", "DLVZ-160", "LLZS-60", "EGC-TB-KF-50", "EGC-TB-KF-70", "EGC-TB-KF-80", "EGC-TB-KF-120", "EGC-TB-KF-185", "ELGA-TB-KF-70", "ELGA-TB-KF-80", "ELGA-TB-KF-120", "ELGA-TB-KF-150", "ELGA-TB-KF-F1-70", "ELGA-TB-KF-F1-80", "ELGA-TB-KF-F1-120", "ELGA-TB-RF-70", "ELGA-TB-RF-80", "ELGA-TB-RF-120", "ELGA-TB-RF-F1-70", "ELGA-TB-RF-F1-80", "ELGA-TB-RF-F1-120", "ELGA-TB-G-70", "ELGA-TB-G-80", "ELGA-TB-G-120", "CKR-070", "CKR-070L", "CKR-090", "CKR-090L", "CKR-110", "CKR-110L", "CKR-145", "CKR-145L", "CKR-200", "CKR-200L", "CKR-280"]
 axis EXCT-100 on exct: belt.mass_kg_m = Float(0.09785714285714285)
 axis EXCT-100 on exct: belt.stiffness_ea_n = Float(666666.6666666666)
 axis EXCT-100 on exct: drive.current_kp_v_a = Float(62.68064212835601)
@@ -73445,6 +73445,84 @@ axis ELGA-TB-KF-150 on single: ratings.belt_teeth_in_mesh = Float(14.5)
 axis ELGA-TB-KF-150 on single, no machine: belt.stiffness_ea_n = Float(775193.7984496125)
 axis ELGA-TB-KF-150 on single, no machine: geometry.pulley_radius_m = Float(0.03692394679731972)
 axis ELGA-TB-KF-150 on single, no machine: ratings.belt_teeth_in_mesh = Float(14.5)
+axis ELGA-TB-KF-F1-70 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-70 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-70 on single: belt.stiffness_ea_n = Float(247619.04761904763)
+axis ELGA-TB-KF-F1-70 on single: drive.velocity_kp_nm_s_rad = Float(0.01994326135084933)
+axis ELGA-TB-KF-F1-70 on single: geometry.pulley_radius_m = Float(0.01432394487827058)
+axis ELGA-TB-KF-F1-70 on single: ratings.belt_teeth_in_mesh = Float(15.0)
+axis ELGA-TB-KF-F1-70 on single, no machine: belt.stiffness_ea_n = Float(247619.04761904763)
+axis ELGA-TB-KF-F1-70 on single, no machine: geometry.pulley_radius_m = Float(0.01432394487827058)
+axis ELGA-TB-KF-F1-70 on single, no machine: ratings.belt_teeth_in_mesh = Float(15.0)
+axis ELGA-TB-KF-F1-80 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-80 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-80 on single: belt.stiffness_ea_n = Float(600000.0)
+axis ELGA-TB-KF-F1-80 on single: drive.velocity_kp_nm_s_rad = Float(0.024901488859408714)
+axis ELGA-TB-KF-F1-80 on single: geometry.pulley_radius_m = Float(0.019894367886486918)
+axis ELGA-TB-KF-F1-80 on single: ratings.belt_teeth_in_mesh = Float(12.5)
+axis ELGA-TB-KF-F1-80 on single, no machine: belt.stiffness_ea_n = Float(600000.0)
+axis ELGA-TB-KF-F1-80 on single, no machine: geometry.pulley_radius_m = Float(0.019894367886486918)
+axis ELGA-TB-KF-F1-80 on single, no machine: ratings.belt_teeth_in_mesh = Float(12.5)
+axis ELGA-TB-KF-F1-120 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-120 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-120 on single: belt.stiffness_ea_n = Float(819672.131147541)
+axis ELGA-TB-KF-F1-120 on single: geometry.pulley_radius_m = Float(0.026260565610162732)
+axis ELGA-TB-KF-F1-120 on single: ratings.belt_teeth_in_mesh = Float(16.5)
+axis ELGA-TB-KF-F1-120 on single, no machine: belt.stiffness_ea_n = Float(819672.131147541)
+axis ELGA-TB-KF-F1-120 on single, no machine: geometry.pulley_radius_m = Float(0.026260565610162732)
+axis ELGA-TB-KF-F1-120 on single, no machine: ratings.belt_teeth_in_mesh = Float(16.5)
+axis ELGA-TB-RF-70 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-RF-70 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-RF-70 on single: belt.stiffness_ea_n = Float(164319.2488262911)
+axis ELGA-TB-RF-70 on single: drive.velocity_kp_nm_s_rad = Float(0.01994326135084933)
+axis ELGA-TB-RF-70 on single: geometry.pulley_radius_m = Float(0.01432394487827058)
+axis ELGA-TB-RF-70 on single: ratings.belt_teeth_in_mesh = Float(15.0)
+axis ELGA-TB-RF-70 on single, no machine: belt.stiffness_ea_n = Float(164319.2488262911)
+axis ELGA-TB-RF-70 on single, no machine: geometry.pulley_radius_m = Float(0.01432394487827058)
+axis ELGA-TB-RF-70 on single, no machine: ratings.belt_teeth_in_mesh = Float(15.0)
+axis ELGA-TB-RF-80 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-RF-80 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-RF-80 on single: belt.stiffness_ea_n = Float(476190.47619047615)
+axis ELGA-TB-RF-80 on single: drive.velocity_kp_nm_s_rad = Float(0.024901488859408714)
+axis ELGA-TB-RF-80 on single: geometry.pulley_radius_m = Float(0.019894367886486918)
+axis ELGA-TB-RF-80 on single: ratings.belt_teeth_in_mesh = Float(12.5)
+axis ELGA-TB-RF-80 on single, no machine: belt.stiffness_ea_n = Float(476190.47619047615)
+axis ELGA-TB-RF-80 on single, no machine: geometry.pulley_radius_m = Float(0.019894367886486918)
+axis ELGA-TB-RF-80 on single, no machine: ratings.belt_teeth_in_mesh = Float(12.5)
+axis ELGA-TB-RF-120 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-RF-120 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-RF-120 on single: belt.stiffness_ea_n = Float(619047.619047619)
+axis ELGA-TB-RF-120 on single: geometry.pulley_radius_m = Float(0.026260565610162732)
+axis ELGA-TB-RF-120 on single: ratings.belt_teeth_in_mesh = Float(16.5)
+axis ELGA-TB-RF-120 on single, no machine: belt.stiffness_ea_n = Float(619047.619047619)
+axis ELGA-TB-RF-120 on single, no machine: geometry.pulley_radius_m = Float(0.026260565610162732)
+axis ELGA-TB-RF-120 on single, no machine: ratings.belt_teeth_in_mesh = Float(16.5)
+axis ELGA-TB-RF-F1-70 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-70 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-70 on single: belt.stiffness_ea_n = Float(247619.04761904763)
+axis ELGA-TB-RF-F1-70 on single: drive.velocity_kp_nm_s_rad = Float(0.01994326135084933)
+axis ELGA-TB-RF-F1-70 on single: geometry.pulley_radius_m = Float(0.01432394487827058)
+axis ELGA-TB-RF-F1-70 on single: ratings.belt_teeth_in_mesh = Float(15.0)
+axis ELGA-TB-RF-F1-70 on single, no machine: belt.stiffness_ea_n = Float(247619.04761904763)
+axis ELGA-TB-RF-F1-70 on single, no machine: geometry.pulley_radius_m = Float(0.01432394487827058)
+axis ELGA-TB-RF-F1-70 on single, no machine: ratings.belt_teeth_in_mesh = Float(15.0)
+axis ELGA-TB-RF-F1-80 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-80 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-80 on single: belt.stiffness_ea_n = Float(600000.0)
+axis ELGA-TB-RF-F1-80 on single: drive.velocity_kp_nm_s_rad = Float(0.024901488859408714)
+axis ELGA-TB-RF-F1-80 on single: geometry.pulley_radius_m = Float(0.019894367886486918)
+axis ELGA-TB-RF-F1-80 on single: ratings.belt_teeth_in_mesh = Float(12.5)
+axis ELGA-TB-RF-F1-80 on single, no machine: belt.stiffness_ea_n = Float(600000.0)
+axis ELGA-TB-RF-F1-80 on single, no machine: geometry.pulley_radius_m = Float(0.019894367886486918)
+axis ELGA-TB-RF-F1-80 on single, no machine: ratings.belt_teeth_in_mesh = Float(12.5)
+axis ELGA-TB-RF-F1-120 on exct: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-120 on exct, no machine: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-120 on single: belt.stiffness_ea_n = Float(819672.131147541)
+axis ELGA-TB-RF-F1-120 on single: geometry.pulley_radius_m = Float(0.026260565610162732)
+axis ELGA-TB-RF-F1-120 on single: ratings.belt_teeth_in_mesh = Float(16.5)
+axis ELGA-TB-RF-F1-120 on single, no machine: belt.stiffness_ea_n = Float(819672.131147541)
+axis ELGA-TB-RF-F1-120 on single, no machine: geometry.pulley_radius_m = Float(0.026260565610162732)
+axis ELGA-TB-RF-F1-120 on single, no machine: ratings.belt_teeth_in_mesh = Float(16.5)
 axis ELGA-TB-G-70 on exct: error error-config-invalid parts.axis
 axis ELGA-TB-G-70 on exct, no machine: error error-config-invalid parts.axis
 axis ELGA-TB-G-70 on single: belt.stiffness_ea_n = Float(164319.2488262911)

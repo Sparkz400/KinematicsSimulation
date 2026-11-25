@@ -39206,7 +39206,7 @@ axis EXCT-100 gantry: belt.mass_kg_m = 0.09785714285714285; belt.stiffness_ea_n 
 axis EXCT-100 single: error error-config-invalid parts.axis
 axis EXCT-15 gantry: error error-config-invalid geometry.stroke_x_m
 axis EXCT-15 single: error error-config-invalid parts.axis
-axis EXCT-30 gantry: belt.mass_kg_m = 0.09785714285714285; belt.stiffness_ea_n = 666666.6666666666; bounds.belt.mass_kg_m = [0.06849999999999999, 0.1272142857142857]; mass.carriage_kg = 6.899841135942758; ratings.belt_max_tension_n = 2140.7142857142853
+axis EXCT-30 gantry: belt.mass_kg_m = 0.09785714285714285; belt.stiffness_ea_n = 666666.6666666666; bounds.belt.mass_kg_m = [0.06849999999999999, 0.1272142857142857]; mass.carriage_kg = 6.899841135942738; ratings.belt_max_tension_n = 2140.7142857142853
 axis EXCT-30 single: error error-config-invalid parts.axis
 axis ELZI-30 gantry: belt.mass_kg_m = 0.05; belt.stiffness_ea_n = 251250.0; bounds.belt.mass_kg_m = [0.035, 0.065]; bounds.ratings.belt_teeth_in_mesh = [8.4, 14.4]; geometry.pulley_radius_m = 0.01909859317102744; mass.carriage_kg = 3.5; mass.z_axis_kg = 1.0; ratings.belt_max_tension_n = 1005.0; ratings.belt_teeth_in_mesh = 12.0; ratings.belt_tooth_load_n_cm = [34.0, 34.0, 33.0, 33.0, 33.0, 32.0, 31.0, 30.0, 29.0, 28.0, 26.0, 25.0, 23.0, 21.0, 19.0, 17.0, 16.0, 13.0]; ratings.belt_width_mm = 15.0; ratings.pulley_max_torque_nm = 9.16732472209317
 axis ELZI-30 single: error error-config-invalid parts.axis
@@ -39344,6 +39344,24 @@ axis ELGA-TB-KF-120 gantry: error error-config-invalid parts.axis
 axis ELGA-TB-KF-120 single: belt.stiffness_ea_n = 619047.619047619; bounds.belt.stiffness_ea_n = [495238.0952380952, 742857.1428571428]; bounds.ratings.belt_teeth_in_mesh = [9.9, 19.8]; geometry.pulley_radius_m = 0.026260565610162732; ratings.belt_teeth_in_mesh = 16.5
 axis ELGA-TB-KF-150 gantry: error error-config-invalid parts.axis
 axis ELGA-TB-KF-150 single: belt.stiffness_ea_n = 775193.7984496125; bounds.belt.stiffness_ea_n = [620155.0387596899, 930232.5581395349]; bounds.ratings.belt_teeth_in_mesh = [8.7, 17.4]; geometry.pulley_radius_m = 0.03692394679731972; ratings.belt_teeth_in_mesh = 14.5
+axis ELGA-TB-KF-F1-70 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-70 single: belt.stiffness_ea_n = 247619.04761904763; bounds.belt.stiffness_ea_n = [198095.2380952381, 297142.85714285716]; bounds.ratings.belt_teeth_in_mesh = [9.0, 18.0]; geometry.pulley_radius_m = 0.01432394487827058; ratings.belt_teeth_in_mesh = 15.0
+axis ELGA-TB-KF-F1-80 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-80 single: belt.stiffness_ea_n = 600000.0; bounds.belt.stiffness_ea_n = [480000.0, 720000.0]; bounds.ratings.belt_teeth_in_mesh = [7.5, 15.0]; geometry.pulley_radius_m = 0.019894367886486918; ratings.belt_teeth_in_mesh = 12.5
+axis ELGA-TB-KF-F1-120 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-KF-F1-120 single: belt.stiffness_ea_n = 819672.131147541; bounds.belt.stiffness_ea_n = [655737.7049180329, 983606.5573770492]; bounds.ratings.belt_teeth_in_mesh = [9.9, 19.8]; geometry.pulley_radius_m = 0.026260565610162732; ratings.belt_teeth_in_mesh = 16.5
+axis ELGA-TB-RF-70 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-RF-70 single: belt.stiffness_ea_n = 164319.2488262911; bounds.belt.stiffness_ea_n = [131455.39906103286, 197183.09859154932]; bounds.ratings.belt_teeth_in_mesh = [9.0, 18.0]; geometry.pulley_radius_m = 0.01432394487827058; ratings.belt_teeth_in_mesh = 15.0
+axis ELGA-TB-RF-80 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-RF-80 single: belt.stiffness_ea_n = 476190.47619047615; bounds.belt.stiffness_ea_n = [380952.38095238095, 571428.5714285714]; bounds.ratings.belt_teeth_in_mesh = [7.5, 15.0]; geometry.pulley_radius_m = 0.019894367886486918; ratings.belt_teeth_in_mesh = 12.5
+axis ELGA-TB-RF-120 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-RF-120 single: belt.stiffness_ea_n = 619047.619047619; bounds.belt.stiffness_ea_n = [495238.0952380952, 742857.1428571428]; bounds.ratings.belt_teeth_in_mesh = [9.9, 19.8]; geometry.pulley_radius_m = 0.026260565610162732; ratings.belt_teeth_in_mesh = 16.5
+axis ELGA-TB-RF-F1-70 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-70 single: belt.stiffness_ea_n = 247619.04761904763; bounds.belt.stiffness_ea_n = [198095.2380952381, 297142.85714285716]; bounds.ratings.belt_teeth_in_mesh = [9.0, 18.0]; geometry.pulley_radius_m = 0.01432394487827058; ratings.belt_teeth_in_mesh = 15.0
+axis ELGA-TB-RF-F1-80 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-80 single: belt.stiffness_ea_n = 600000.0; bounds.belt.stiffness_ea_n = [480000.0, 720000.0]; bounds.ratings.belt_teeth_in_mesh = [7.5, 15.0]; geometry.pulley_radius_m = 0.019894367886486918; ratings.belt_teeth_in_mesh = 12.5
+axis ELGA-TB-RF-F1-120 gantry: error error-config-invalid parts.axis
+axis ELGA-TB-RF-F1-120 single: belt.stiffness_ea_n = 819672.131147541; bounds.belt.stiffness_ea_n = [655737.7049180329, 983606.5573770492]; bounds.ratings.belt_teeth_in_mesh = [9.9, 19.8]; geometry.pulley_radius_m = 0.026260565610162732; ratings.belt_teeth_in_mesh = 16.5
 axis ELGA-TB-G-70 gantry: error error-config-invalid parts.axis
 axis ELGA-TB-G-70 single: belt.stiffness_ea_n = 164319.2488262911; bounds.belt.stiffness_ea_n = [131455.39906103286, 197183.09859154932]; bounds.ratings.belt_teeth_in_mesh = [9.0, 18.0]; geometry.pulley_radius_m = 0.01432394487827058; ratings.belt_teeth_in_mesh = 15.0
 axis ELGA-TB-G-80 gantry: error error-config-invalid parts.axis
