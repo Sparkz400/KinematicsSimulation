@@ -1416,6 +1416,16 @@ impl Model {
         Some(self.file.clone()).filter(|f| !f.is_empty() && !f.to_ascii_lowercase().ends_with(".json"))
     }
 
+    /// Where the file dialog starts when Save is asked for over an open and `save_target` has no file: beside the JSON
+    /// machine file the config came from, as TOML; nowhere for a config from no file (not the field, which names the
+    /// file about to be opened).
+    pub fn save_suggestion(&self) -> String {
+        if self.file.is_empty() {
+            return String::new();
+        }
+        std::path::Path::new(&self.file).with_extension("toml").display().to_string()
+    }
+
     /// The config differs from what was last opened, saved or taken from the machine's default.
     pub fn dirty(&self) -> bool {
         self.config != self.clean

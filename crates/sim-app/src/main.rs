@@ -1674,7 +1674,7 @@ fn panels(
             Action::UseCandidate(row) => model.use_candidate(row),
             Action::RunView(kind) => model.views.start(kind, model.entry, &model.config, &model.inputs),
             Action::OpenConfig(dialog) => {
-                if let Some(path) = config_path(model, dialog, false) {
+                if let Some(path) = config_path(model, dialog, false, &model.inputs.config_file) {
                     if model.dirty() {
                         state.ask = Some(Ask::Open(path));
                     } else {
@@ -1683,7 +1683,7 @@ fn panels(
                 }
             }
             Action::SaveConfig(dialog) => {
-                if let Some(path) = config_path(model, dialog, true) {
+                if let Some(path) = config_path(model, dialog, true, &model.inputs.config_file) {
                     model.save_config(&path);
                 }
             }
@@ -1738,7 +1738,9 @@ fn open_file(state: &mut State, path: &str) {
 fn save_first(state: &mut State, opening: bool) -> bool {
     let model = &mut state.model;
     let target = if opening { model.save_target() } else { Some(model.inputs.config_file.clone()) };
-    let Some(path) = target.filter(|t| !t.is_empty()).or_else(|| config_path(model, true, true)) else {
+    // Opening, the field names the file about to be opened: the dialog does not start there.
+    let start = if opening { model.save_suggestion() } else { model.inputs.config_file.clone() };
+    let Some(path) = target.filter(|t| !t.is_empty()).or_else(|| config_path(model, true, true, &start)) else {
         return false;
     };
     model.save_config(&path);
@@ -1882,10 +1884,10 @@ fn save_path(kind: &str, extension: &str, name: &str) -> Option<std::path::PathB
     rfd::FileDialog::new().add_filter(kind, &[extension]).set_file_name(name).save_file()
 }
 
-/// The file the config file field names, or with `dialog` the one the system's file dialog is given (starting
-/// where the field points); `None` where it is cancelled. The dialog holds up the window until it is closed.
-fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
-    let typed = std::path::Path::new(&model.inputs.config_file);
+/// The file the config file field names, or with `dialog` the one the system's file dialog is given (starting at
+/// `start`, usually the field); `None` where it is cancelled. The dialog holds up the window until it is closed.
+fn config_path(model: &Model, dialog: bool, save: bool, start: &str) -> Option<String> {
+    let typed = std::path::Path::new(start);
     if !dialog {
         return Some(model.inputs.config_file.clone());
     }

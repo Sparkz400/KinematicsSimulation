@@ -1599,6 +1599,9 @@ fn a_json_machine_file_is_remembered_between_starts() {
     assert_eq!((model.entry.id, model.file.as_str()), ("h-bot", file.as_str()), "{:?}", model.messages);
     assert_eq!(model.inputs.config_file, "", "Save would write TOML over the JSON file");
     assert_eq!(model.save_target(), None);
+    // The dialog Save then asks with starts beside it, as TOML; with no file, nowhere (not at the field's file).
+    assert_eq!(model.save_suggestion(), file.replace(".json", ".toml"));
+    assert_eq!(Model::new(MACHINES[0], "en").save_suggestion(), "");
     let stored = settings_of(d.state());
     assert_eq!(stored.config_file.as_deref(), Some(file.as_str()));
     // The next start: another machine shown, the file opened over it.
