@@ -153,8 +153,9 @@ app's (`scene::part_color`).
 The page draws with plain WebGL2 written in the page, no library. The plain wheel scrolls the page (a hint over the view says how to zoom). Mouse: drag turns, Shift + drag or a drag
 with the right or middle button pans, Ctrl + wheel (Cmd on a Mac; a trackpad pinch does the same) zooms about the
 pointer, the "+" and "−" buttons zoom about the centre, a double-click or "Fit" fits the view again. Touch: a vertical
-swipe scrolls the page, a sideways swipe turns the machine about the vertical axis, two fingers pinch to zoom and drag
-to pan (tilting needs a mouse; on a touch screen two fingers dragged vertically may scroll the page instead). Pause/Play and Restart
+swipe scrolls the page, a sideways swipe turns the machine about the vertical axis, two fingers pinch to zoom, drag
+sideways to pan and drag up or down to tilt (two fingers never scroll the page, and a touch screen has no vertical pan:
+tilt in its place). Pause/Play and Restart
 (which takes the config, the motion and the path in the editor). The legend shows the simulated time, the cycle time and
 the tool position; an orange cube marks the tool. The trail is the tool's path, one point a millisecond, coloured by its
 distance from the plan (the app's "following error" trail) on a fixed scale set on the page: blue at none, yellow at

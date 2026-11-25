@@ -474,9 +474,9 @@ function setupView() {
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   view.gl = gl;
   const c = $("view");
-  // Pointers by id: one turns (a mouse with Shift or another button pans), two pinch (zoom about their middle) and
-  // drag (pan). Touch and pen only turn about the vertical axis: a vertical swipe belongs to the page (touch-action:
-  // pan-y), and the browser then sends pointercancel.
+  // Pointers by id: one turns (a mouse with Shift or another button pans), two pinch (zoom about their middle), pan
+  // sideways with the middle and tilt with its vertical movement. One touch or pen only turns about the vertical axis:
+  // a one-finger vertical swipe belongs to the page (touch-action: pan-y), and the browser then sends pointercancel.
   const ptrs = new Map();
   const grip = () => {
     const [a, b] = [...ptrs.values()];
@@ -499,7 +499,8 @@ function setupView() {
       Object.assign(p, { x: e.clientX, y: e.clientY });
       const now = grip();
       zoomAt(view.zoom * wasSpread / spread(), now.x, now.y);
-      panBy(now.x - was.x, now.y - was.y);
+      panBy(now.x - was.x, 0);
+      view.pitch = Math.max(-1.5, Math.min(1.5, view.pitch + (now.y - was.y) * 0.01));
     } else if (view.pans) panBy(e.clientX - p.x, e.clientY - p.y);
     else {
       view.yaw -= (e.clientX - p.x) * 0.01;
@@ -507,6 +508,11 @@ function setupView() {
     }
     Object.assign(p, { x: e.clientX, y: e.clientY });
   });
+  // touch-action: pan-y still lets the browser scroll the page under two fingers (it only forbids its own pinch-zoom),
+  // and it then cancels the pointers; stopping the touch events of a two-finger gesture keeps the page where it is.
+  c.addEventListener("touchmove", (e) => {
+    if (e.touches.length >= 2 && e.cancelable) e.preventDefault();
+  }, { passive: false });
   c.addEventListener("contextmenu", (e) => e.preventDefault());
   c.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); }); // no middle-button autoscroll
   c.addEventListener("dblclick", fitView);

@@ -114,8 +114,9 @@ Die Seite zeichnet mit WebGL2 ohne Bibliothek. Das einfache Mausrad scrollt die 
 Umschalt + Ziehen oder Ziehen mit rechter oder mittlerer Taste verschiebt, Strg + Mausrad (auf dem Mac Cmd; eine
 Pinch-Geste auf dem Trackpad wirkt ebenso) zoomt um den Zeiger, die Tasten „+“ und „−“ zoomen um die Mitte, ein
 Doppelklick oder „Einpassen“ passt die Ansicht neu ein. Touch: Senkrechtes Wischen scrollt die Seite, seitliches Wischen
-dreht die Maschine um die Hochachse, zwei Finger zoomen (Pinch) und verschieben; Kippen geht nur mit der Maus, und zwei
-senkrecht gezogene Finger können stattdessen die Seite scrollen. Anhalten/Weiter und Neustart (mit
+dreht die Maschine um die Hochachse, zwei Finger zoomen (Pinch), verschieben seitlich und kippen
+die Ansicht beim Ziehen nach oben oder unten (zwei Finger scrollen die Seite nie; ein senkrechtes Verschieben gibt es auf dem Touchscreen nicht mehr, an seiner
+Stelle wird gekippt). Anhalten/Weiter und Neustart (mit
 Konfiguration, Bewegung und Pfad aus dem Editor). Die Spur ist der Weg des Werkzeugs, ein Punkt je Millisekunde, gefärbt
 nach seinem Abstand von der Planposition auf einer festen, auf der Seite eingestellten Skala: blau bei keinem, gelb bei
 der Hälfte, rot beim eingestellten Wert (2 mm, solange nicht geändert), magenta darüber. Die letzten 40.000 Punkte
