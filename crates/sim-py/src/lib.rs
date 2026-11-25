@@ -1298,8 +1298,9 @@ fn tuning(py: Python<'_>, config: &PyConfig, size: f64, amplitude: f64) -> PyRes
     Ok(out.unbind())
 }
 
-/// Per motor the stability margins of its velocity loop, as `sim-cli margins` gives them: columns "run" ("nominal",
-/// and with `bands=True` each value of `[bounds]` at its low and its high bound), "motor", "crossover_hz",
+/// Per motor the stability margins of its velocity loop, as `sim-cli margins` gives them: columns "run" ("" for the
+/// config as it is, "start.pose=[x y ...]" at each other pose the cycle stops at, and with `bands=True` "path=value"
+/// for each value of `[bounds]` at its low and its high bound), "motor", "crossover_hz",
 /// "phase_margin_deg", "gain_margin_db", "peak_sensitivity", "peak_frequency_hz" and "ok" (false: the loop is unstable
 /// or its measurement not valid). Crossover and phase margin are NaN where the loop has no gain crossover in the band
 /// (not measurable; "ok" is then the gain margin's alone), the CLI's empty cell.
