@@ -690,8 +690,6 @@ struct FitRow {
     config: f64,
     fitted: f64,
     error: f64,
-    /// The value stands for others too (`JointValue::combines`): not its own.
-    combined: bool,
 }
 
 /// The table of `fit` as it is written: with `--within` two columns more, how many standard errors the fitted value is
@@ -726,7 +724,7 @@ impl FitTable<'_> {
 
     fn note(&mut self, quantity: &str, of: &str, values: Option<[f64; 3]>) {
         if let Some([config, fitted, error]) = values {
-            self.rows.push(FitRow { quantity: quantity.into(), of: of.into(), config, fitted, error, combined: false });
+            self.rows.push(FitRow { quantity: quantity.into(), of: of.into(), config, fitted, error });
         }
     }
 }
@@ -754,9 +752,6 @@ fn fit_rows(
                 for v in &fit.values {
                     let line = format!("{},{},{:.6e},{:.6e},{:.3e},", v.quantity, v.of, v.config, v.fitted, v.error);
                     table.row(line, v.quantity, &v.of, Some([v.config, v.fitted, v.error]))?;
-                    if let Some(row) = table.rows.last_mut() {
-                        row.combined = !v.combines.is_empty();
-                    }
                 }
                 // One step's row is of `payload`, several are numbered as their factors after them are.
                 for (j, (time, error)) in fit.payload_steps.iter().enumerate() {
@@ -851,14 +846,14 @@ fn fit_rows(
     Ok((advice, result, table.rows))
 }
 
-/// `fit --write FILE`: the config as the command line gives it, with each fitted quantity that is a factor on keys of
-/// it applied to them and a `[bounds]` entry of `sigmas` standard errors either side of each. Two are: the factor on a
-/// stiffness (`--stiffness`, its key), and the factor on the payload of `fit_joints` where it stands for nothing else
-/// (`JointValue::combines` empty), on the keys `identify::payload_keys` finds the payload to scale with exactly (its mass
-/// and inertia, as the fitted factor is fitted/config of the replay). Every other quantity of the table is the trace's
-/// value of what several keys make up (the moved mass of an axis, a friction that the motor, gearbox and guide share) or
-/// of none, and is named on the error stream with the reason, as is a key the file cannot take. Comments of the written
-/// file are not kept and its keys come in alphabetical order (`Config::to_text`).
+/// `fit --write FILE`: the config as the command line gives it, with each fitted quantity that is exactly one key of it
+/// set to the fitted value and a `[bounds]` entry of `sigmas` standard errors either side of it. Only the factor on a
+/// stiffness (`--stiffness`) is one key; every other quantity of the table is the trace's value of what several keys
+/// make up (the moved mass of an axis, a friction that the motor, gearbox and guide share) or of none, and is named on
+/// the error stream with the reason, as is a key the file cannot take. The payload's factor of a joint fit is not
+/// written either: on a cycle that picks and places, the trace holds the payload part of the time, and the factor is a
+/// share of that time as much as of the mass (the delta's cycle with 4 kg against its 3 kg came out at 0.72 times the
+/// config's). Comments of the written file are not kept and its keys come in alphabetical order (`Config::to_text`).
 fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas: f64) -> Result<(), Failure> {
     let (entry, resolved) = machine_and_config(args)?;
     // What the file holds: the config before the parts it names are put in, so that those stay named.
@@ -869,22 +864,15 @@ fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas
     let mut written = Vec::new();
     for row in rows {
         let name = format!("{} {}", row.quantity, row.of);
-        let keys = match row.quantity.as_str() {
-            "stiffness_factor" => Some(vec![row.of.clone()]),
-            "payload_factor" if !row.combined => sim_components::identify::payload_keys(entry, &resolved),
-            _ => None,
-        };
-        let Some(keys) = keys else {
+        if row.quantity != "stiffness_factor" {
             eprintln!("{}", tr.tr_arg("cli-fit-write-lumped", &name));
             continue;
-        };
-        // The factor and its error relative to the config's own (1 for the stiffness, the replay's for the payload).
+        }
+        // The factor and its error relative to the config's own, which is 1.
         let (factor, error) = (row.fitted / row.config, row.error / row.config.abs());
-        for key in keys {
-            match fitted_band(entry, &file, &resolved, &key, factor, error, sigmas) {
-                Ok(band) => written.push((key, band)),
-                Err(reason) => eprintln!("{}", tr.tr_arg(reason, &format!("{name} ({key})"))),
-            }
+        match fitted_band(entry, &file, &resolved, &row.of, factor, error, sigmas) {
+            Ok(band) => written.push((row.of.clone(), band)),
+            Err(reason) => eprintln!("{}", tr.tr_arg(reason, &name)),
         }
     }
     if written.is_empty() {

@@ -1124,58 +1124,6 @@ fn payload_steps(measured: &[Sample], config: &[Sample], time: &[f64], h: usize,
     steps
 }
 
-/// The keys of `cfg` (resolved) that `fit_joints`' factor on the payload scales exactly: every number whose name begins
-/// with `payload` and ends in `_kg` or `_kgm2` (its mass and inertia; where it sits stays), checked on the machine
-/// itself: with them doubled, the rigid torque the payload adds at each motor doubles and the torque without the
-/// payload stays, at the start pose at rest and moving two ways. `None` where that does not hold (a key the payload
-/// depends on is named otherwise, or one of them acts beyond the payload), where no key is found or the payload adds
-/// nothing (`effects.payload` off).
-pub fn payload_keys(entry: &MachineEntry, cfg: &Config) -> Option<Vec<String>> {
-    let keys: Vec<String> = cfg
-        .leaves()
-        .into_iter()
-        .filter(|(path, value)| {
-            let leaf = path.rsplit('.').next().unwrap_or("");
-            !path.starts_with("bounds.")
-                && value.as_float().is_some()
-                && leaf.starts_with("payload")
-                && (leaf.ends_with("_kg") || leaf.ends_with("_kgm2"))
-        })
-        .map(|(path, _)| path)
-        .collect();
-    let mut doubled = cfg.clone();
-    for key in &keys {
-        doubled.set(key, toml::Value::Float(2.0 * cfg.f64(key).ok()?)).ok()?;
-    }
-    let (mut one, mut two) = ((entry.build)(cfg).ok()?, (entry.build)(&doubled).ok()?);
-    let n = one.motors().len();
-    let mut angle = vec![0.0; n];
-    one.inverse(&cfg.f64s("start.pose").ok()?, &mut angle);
-    let mut largest = 0f64;
-    for (speed, acc) in [(0.0, 0.0), (0.3, 2.0), (-0.2, -1.5)] {
-        let (speed, acc, rotor) = (vec![speed; n], vec![acc; n], vec![acc; n]);
-        let mut torques = [vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]];
-        for (m, machine) in [&mut one, &mut two].into_iter().enumerate() {
-            for (a, attached) in [false, true].into_iter().enumerate() {
-                machine.set_payload_attached(attached);
-                machine.rigid_split_torque(&angle, &speed, &acc, &rotor, &mut torques[2 * m + a]);
-            }
-        }
-        let [without, with, without2, with2] = &torques;
-        let scale = with.iter().chain(without).fold(1e-12_f64, |s, t| s.max(t.abs()));
-        for k in 0..n {
-            let (added, added2) = (with[k] - without[k], with2[k] - without2[k]);
-            if !(added.is_finite() && (added2 - 2.0 * added).abs() <= 1e-9 * scale)
-                || (without2[k] - without[k]).abs() > 1e-9 * scale
-            {
-                return None;
-            }
-            largest = largest.max(added.abs() / scale);
-        }
-    }
-    (!keys.is_empty() && largest > 1e-6).then_some(keys)
-}
-
 /// Stage 1 in the motors' own coordinates, for every machine, and the only one for a machine whose motors do not turn
 /// in proportion to its axes (the delta's arms, a SCARA, an arm): the motor torques regressed on the machine's own
 /// rigid model (`regressor`), on the trace and on the config's replay of it, on the trace's base parameters (`solve`).
