@@ -1138,6 +1138,12 @@ fn interpolate(mut points: Vec<(f64, f64)>, x: f64) -> f64 {
     last.1
 }
 
+/// The y of the first of `points` (x, y) whose x is at least `x`, the last point's beyond them; 1 for no points.
+fn up_to(mut points: Vec<(f64, f64)>, x: f64) -> f64 {
+    points.sort_by(|a, b| a.0.total_cmp(&b.0));
+    points.iter().find(|p| x <= p.0).or(points.last()).map_or(1.0, |p| p.1)
+}
+
 /// The (x, y) points of one `quantity` of a derating table, x from the column `x`, y the output current factor.
 fn derating_points(table_rows: &[Row], quantity: &str, x: &str) -> Vec<(f64, f64)> {
     table_rows
@@ -1161,7 +1167,8 @@ fn last_x(points: &[(f64, f64)]) -> f64 {
 /// state no derating, and silently ignoring the condition would judge it at rated conditions.
 ///
 /// S210 (`derating_s210.csv`, operating instructions Table 12-9): the table of altitude against ambient temperature,
-/// interpolated linearly between its points, the pulse frequency fixed at 8 kHz. S120 booksize Motor Module
+/// an altitude by the row "up to" the next table altitude, the ambient interpolated linearly between the columns (as
+/// Siemens' rule trades 5 K for 10 % of the current), the pulse frequency fixed at 8 kHz. S120 booksize Motor Module
 /// (`derating_s120.csv`): the factors of altitude (10 % per 1000 m above 1000 m), ambient temperature (2.67 % per K above
 /// 40 degC) and pulse frequency (a curve by module group), multiplied. Siemens does not say how they combine; the product is
 /// this simulator's assumption on the safe side. Of Siemens' two ways to trade altitude (reduce the current by 10 % per
@@ -1205,7 +1212,8 @@ pub fn drive_derating(cfg: &Config, article: &str) -> Result<f64, ConfigError> {
             return Err(refused(pulse_key));
         }
         let h = altitude.unwrap_or_else(|| first_x(&altitudes));
-        let across: Vec<(f64, f64)> = columns.into_iter().map(|(t, points)| (t, interpolate(points, h))).collect();
+        // The rows are "up to 2000 m" and so on: an altitude takes the row of the next table altitude at or above it.
+        let across: Vec<(f64, f64)> = columns.into_iter().map(|(t, points)| (t, up_to(points, h))).collect();
         return Ok(interpolate(across.clone(), ambient.unwrap_or_else(|| first_x(&across))));
     }
     if let Some(module) = rows(table("siemens/motor_modules_s120.csv")).iter().find(|r| r["part_number"] == article) {
