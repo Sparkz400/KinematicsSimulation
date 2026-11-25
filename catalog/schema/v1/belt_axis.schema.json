@@ -47,6 +47,12 @@
     "coupling_part_number": {
       "type": "string"
     },
+    "dynamic_load_distance_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m",
+      "description": "The travel of the guide the loads fy, fz, mx, my and mz_dynamic are rated for: 5000 km (5000000) or 10000 km (10000000) as printed; empty where the document states none."
+    },
     "feed_force_continuous_n": {
       "type": "number",
       "minimum": 0,

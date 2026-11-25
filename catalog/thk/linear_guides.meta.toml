@@ -1,0 +1,49 @@
+schema_version = 1
+class = "linear_guide"
+key = ["part_number"]
+default_source = "thk-shs"
+notes = '''
+Source: THK Co., Ltd., "LM Guide" General Catalog (editions 515-2E for SHS, 515-1E for HSR, as the chunks stamp them):
+SHS blocks C, LC (dimensions page A1-98, rail dimensions and ratings A1-99), V, LV (A1-100, A1-101) and R, LR (A1-102,
+A1-103), sizes 15 to 65 (R and LR to 55); HSR blocks C, LC of sizes 15 to 55 and XC, XLC of size 65 (A1-192, A1-193;
+the chunk's text prints these page numbers without digits, they are the chunk's own: en_a01_192 starts at A1-192).
+Extracted by catalog/tools/extract_thk_guides.py; the numbers are THK's, the layout is ours.
+One row per block model and size. Left out: the stainless steel blocks (suffix M: same ratings, no values of their own),
+  the other HSR models (A, B, R, T, ...: other chunks) and every other LM Guide series.
+part_number: THK's model number as printed without the space (SHS25LC for "SHS 25LC"); the full model number adds the
+  number of blocks on a rail, seals, clearance, accuracy and rail length. series: SHS (caged ball) or HSR (full ball).
+  size: the rail size.
+carriage_type: the block model (SHS-C, SHS-LC, SHS-V, SHS-LV, SHS-R, SHS-LR, HSR-C, HSR-LC, HSR-XC, HSR-XLC).
+rail_width: W1; height: M, the height from the bottom of the rail to the top of the block; carriage_length: L, with
+  seals UU or SS (table footnote 1); all mm as printed.
+dynamic_load_rating: C in N (printed in kN) for 50 km: "a reference distance of 50 km for an LM Guide with balls and
+  100 km for an LM Guide with rollers" (page A1-67 of the catalogue, chunk en_a01_060); dynamic_load_rating_distance_m =
+  50000 on every row, the same basis as HIWIN.
+static_load_rating: C0 in N (printed in kN).
+static_moment_x: MC, the static permissible moment in the rolling direction; static_moment_y: MA, in the pitching
+  direction; static_moment_z: MB, in the yawing direction (assignment from the figure legend of "Static Permissible
+  Moment M0", page A-8 of the General Catalog's "A Technical Descriptions of the Products", an earlier numbering of
+  the catalogue than the A1-xx chunks). The table takes the "1 block" values (kN m printed, N m here); the values for
+  two blocks in close contact are not rows. MC is printed for one block only.
+carriage_mass: block mass in kg; rail_mass: kg/m, as printed.
+dynamic moments, seal_drag, friction_force, preload_class: THK prints static moments only and gives no seal
+  resistance or preload force on these pages; empty.
+'''
+
+[[sources]]
+id = "thk-shs"
+document = "THK Co., Ltd., LM Guide General Catalog, model SHS, chunk en_a01_094 (515-2E)"
+date = "2026-04"
+locator = "pages A1-98 to A1-103 (dimension tables and tables of ratings, moments and masses of SHS-C, LC, V, LV, R, LR)"
+method = "script:tools/extract_thk_guides.py"
+url = "https://tech.thk.com/en/products/pdf/en_a01_094.pdf"
+retrieved = "2026-11-25"
+
+[[sources]]
+id = "thk-hsr"
+document = "THK Co., Ltd., LM Guide General Catalog, model HSR, chunk en_a01_192 (515-1E)"
+date = "2026-04"
+locator = "pages A1-192 and A1-193 (models HSR-C, LC, XC, XLC: dimensions, ratings, moments and masses)"
+method = "script:tools/extract_thk_guides.py"
+url = "https://tech.thk.com/en/products/pdfs/en_a01_192.pdf"
+retrieved = "2026-11-25"

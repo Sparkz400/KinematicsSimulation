@@ -27,10 +27,11 @@ HEADER = ["series", "size", "kind", "belt_material", "belt_pitch_m", "belt_width
           "belt_elongation_force_n", "pulley_effective_diameter_m", "feed_per_rev_m", "pulley_teeth",
           "max_no_load_torque_nm", "max_pulley_torque_nm", "feed_force_peak_n", "max_speed_m_s",
           "max_acceleration_m_s2", "repeatability_m", "fy_dynamic_n", "fz_dynamic_n", "mx_dynamic_nm", "my_dynamic_nm",
-          "mz_dynamic_nm", "mass_at_zero_stroke_kg", "mass_per_stroke_kg_m", "moved_mass_x_kg", "stroke_x_min_m",
-          "stroke_x_max_m"]
+          "mz_dynamic_nm", "dynamic_load_distance_m", "mass_at_zero_stroke_kg", "mass_per_stroke_kg_m",
+          "moved_mass_x_kg", "stroke_x_min_m", "stroke_x_max_m"]
 # The standard belt; the -PU2 option (polyurethane with steel cord) is not a row.
 BELT = "polychloroprene or NBR with glass cord and nylon coating"
+PU = "polyurethane with steel cord"  # the food zone variants
 VALUE = re.compile(r"±?\d+(?:\.\d+)?|–")
 RANGE = re.compile(r"(\d+)\s*…\s*(\d+)")
 
@@ -141,7 +142,7 @@ def egc(lines):
     rows = []
     for k, size in enumerate(sizes):
         r = dict.fromkeys(HEADER, "")
-        r.update(series="EGC-TB-KF", size=size, kind="axis", belt_material=BELT)
+        r.update(series="EGC-TB-KF", size=size, kind="axis", belt_material=BELT, dynamic_load_distance_m="5000000")
         for col, values in get.items():
             if col != "stroke":
                 r[col] = si(values[k], conv.get(col, "same"))
@@ -153,39 +154,63 @@ def egc(lines):
     return rows
 
 
+# Per ELGA-TB variant: where a sheet prints one row per slide variant (ELGA-..., -S, -L, or the T8 option) the standard
+# slide's row is the first "ELGA-..." line below the heading; `sub` names the rows that are printed so. The loads are
+# rated for the travel of the guide in km (KF and KF-F1 5000 km, RF and RF-F1 10000 km; the G sheet states none).
+ELGA = {
+    "ELGA-TB-KF": dict(sub=("elongation",), belt=BELT, km="5000"),
+    "ELGA-TB-KF-F1": dict(sub=(), belt=PU, km="5000"),
+    "ELGA-TB-RF": dict(sub=("stroke", "force", "no_load", "torque", "weight", "elongation", "moments"), belt=BELT,
+                       km="10000"),
+    "ELGA-TB-RF-F1": dict(sub=("stroke", "weight", "moments"), belt=PU, km="10000"),
+    "ELGA-TB-G": dict(sub=("elongation",), belt=BELT, km=""),
+}
+
+
 def elga(lines, series):
     s = Section(lines, series)
+    cfg = ELGA[series]
     g, w, b = "General technical data", r"Weight \[kg\]", "Toothed belt"
     ld = r"(Max\. p|P)ermissible forces and torques.*"
-    moving = dict(label="ELGA-…", after="Moving mass") if series == "ELGA-TB-KF" else dict(label="Moving mass")
+    moving = dict(label="Moving mass") if series == "ELGA-TB-G" else dict(label="ELGA-…", after="Moving mass")
+
+    def pick(kind, heading, **kw):
+        """The row of `heading`, or, where the variant's sheet prints one row per slide, its first row ELGA-..."""
+        return dict(label="ELGA-…", after=heading, **kw) if kind in cfg["sub"] else dict(label=heading, **kw)
+
     sizes = [c for c, _ in s.table(g)[1]]
+    if "weight" in cfg["sub"]:
+        basic, more = pick("weight", "Basic weight with"), pick("weight", "Additional weight")
+    else:
+        basic = dict(label="Basic weight with 0 mm stroke" + (" (including slide)" if series == "ELGA-TB-G" else ""))
+        more = dict(label="Additional weight per 1000 mm stroke")
     get = {
-        "stroke": s.row(g, "Working stroke", ranges=True),
-        "feed_force_peak_n": s.row(g, "Max. feed force Fx"),
-        "max_no_load_torque_nm": s.row(g, "Max. no-load torque"),
-        "max_pulley_torque_nm": s.row(g, "Max. driving torque"),
+        "stroke": s.row(g, ranges=True, **pick("stroke", "Working stroke")),
+        "feed_force_peak_n": s.row(g, **pick("force", "Max. feed force Fx")),
+        "max_no_load_torque_nm": s.row(g, **pick("no_load", "Max. no-load torque")),
+        "max_pulley_torque_nm": s.row(g, **pick("torque", "Max. driving torque")),
         "max_speed_m_s": s.row(g, "Max. speed", merged=True),
         "max_acceleration_m_s2": s.row(g, "Max. acceleration", merged=True),
         "repeatability_m": s.row(g, "Repetition accuracy", merged=True),
-        "mass_at_zero_stroke_kg": s.row(w, "Basic weight with 0 mm stroke" + (" (including slide)" if series == "ELGA-TB-G" else "")),
-        "mass_per_stroke_kg_m": s.row(w, "Additional weight per 1000 mm stroke"),
+        "mass_at_zero_stroke_kg": s.row(w, **basic),
+        "mass_per_stroke_kg_m": s.row(w, **more),
         "moved_mass_x_kg": s.row(w, **moving),
         "belt_pitch_m": s.row(b, "Pitch"),
-        "belt_elongation": s.row(b, "ELGA-…", after="Elongation"),
+        "belt_elongation": s.row(b, **pick("elongation", "Elongation")),
         "pulley_effective_diameter_m": s.row(b, "Effective diameter"),
         "feed_per_rev_m": s.row(b, "Feed constant"),
         "fy_dynamic_n": s.row(ld, "Fymax."),
         "fz_dynamic_n": s.row(ld, "Fzmax"),
         "mx_dynamic_nm": s.row(ld, "Mxmax."),
-        "my_dynamic_nm": s.row(ld, "Mymax."),
-        "mz_dynamic_nm": s.row(ld, "Mzmax."),
+        "my_dynamic_nm": s.row(ld, **pick("moments", "Mymax.")),
+        "mz_dynamic_nm": s.row(ld, **pick("moments", "Mzmax.")),
     }
     conv = {"repeatability_m": "milli", "belt_pitch_m": "milli", "pulley_effective_diameter_m": "milli",
             "feed_per_rev_m": "milli", "belt_elongation": "percent"}
     rows = []
     for k, size in enumerate(sizes):
         r = dict.fromkeys(HEADER, "")
-        r.update(series=series, size=size, kind="axis", belt_material=BELT)
+        r.update(series=series, size=size, kind="axis", belt_material=cfg["belt"])
         for col, values in get.items():
             if col != "stroke":
                 r[col] = si(values[k], conv.get(col, "same"))
@@ -193,6 +218,7 @@ def elga(lines, series):
         r["belt_elongation_force_n"] = r["feed_force_peak_n"]  # "1) At max. feed force"
         r["stroke_x_min_m"], r["stroke_x_max_m"] = (to_si(v, "milli") for v in get["stroke"][k])
         r["pulley_teeth"] = teeth(get["feed_per_rev_m"][k], get["belt_pitch_m"][k])
+        r["dynamic_load_distance_m"] = to_si(cfg["km"], "kilo") if cfg["km"] else ""
         rows.append(r)
     return rows
 
@@ -210,7 +236,7 @@ def main(egc_txt, elga_txt, out):
     out = Path(out)
     write(out / "belt_axes_egc.csv", egc(read(egc_txt)))
     lines = read(elga_txt)
-    write(out / "belt_axes_elga.csv", elga(lines, "ELGA-TB-KF") + elga(lines, "ELGA-TB-G"))
+    write(out / "belt_axes_elga.csv", sum((elga(lines, series) for series in ELGA), []))
 
 
 if __name__ == "__main__":

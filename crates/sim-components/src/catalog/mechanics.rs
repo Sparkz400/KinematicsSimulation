@@ -498,3 +498,56 @@ pub fn mech_axes(cfg: &Config) -> Vec<(String, &'static str, f64)> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(cells: &[(&'static str, &'static str)]) -> Row {
+        Box::leak(Box::new(cells.iter().copied().collect::<HashMap<_, _>>()))
+    }
+
+    fn rated() -> Config {
+        Config::parse("format_version = 1\n[ratings]\nguide_max_load_n = 1.0\nguide_dynamic_load_rating_n = 1.0\n")
+            .unwrap()
+    }
+
+    /// A guide row with an empty cell gives "not available" for the figure that needs it, and no other figure: an empty C
+    /// (or a C without the distance it is for) is no rating, so there is no life and no set; an empty C0 leaves the set
+    /// without a static rating (the search refuses it); an empty seal drag or mass leaves the config's own friction and
+    /// carriage mass alone, never zero.
+    #[test]
+    fn an_empty_cell_of_a_guide_row_is_not_available_never_zero_or_unlimited() {
+        let full = [
+            ("part_number", "T1"),
+            ("dynamic_load_rating_n", "30000"),
+            ("dynamic_load_rating_distance_m", "100000"),
+            ("static_load_rating_n", "40000"),
+        ];
+        // 30000 N for 100 km is 30000 x 2^(1/3) for 50 km.
+        assert!((guide_rating_50km(&row(&full)).unwrap() - 30000.0 * 2.0_f64.cbrt()).abs() < 1e-9);
+        for empty in ["dynamic_load_rating_n", "dynamic_load_rating_distance_m", "static_load_rating_n"] {
+            let cells: Vec<_> = full.iter().copied().map(|(k, v)| if k == empty { (k, "") } else { (k, v) }).collect();
+            let r = row(&cells);
+            let mut cfg = rated();
+            assert!(apply_guides(&mut cfg, &r, 4.0).is_err(), "{empty}");
+            assert_eq!(cfg.f64("ratings.guide_dynamic_load_rating_n").unwrap(), 1.0, "{empty}");
+            assert_eq!(cfg.f64("ratings.guide_max_load_n").unwrap(), 1.0, "{empty}");
+        }
+        assert!(guide_rating_50km(&row(&[("part_number", "T1"), ("dynamic_load_rating_n", "30000")])).is_none());
+        // No seal drag and no mass in the row: the config's friction and carriage mass are not touched.
+        let mut cfg = Config::parse(
+            "format_version = 1\n[ratings]\nguide_max_load_n = 1.0\nguide_dynamic_load_rating_n = 1.0\n\
+             [mass]\ncarriage_kg = 4.0\n[friction_x]\ncoulomb_n = 15.0\nstiction_n = 20.0\n",
+        )
+        .unwrap();
+        apply_guides(&mut cfg, &row(&full), 4.0).unwrap();
+        assert_eq!(cfg.f64("mass.carriage_kg").unwrap(), 4.0);
+        assert_eq!(cfg.f64("friction_x.coulomb_n").unwrap(), 15.0);
+        assert_eq!(cfg.f64("friction_x.stiction_n").unwrap(), 20.0);
+        assert!(
+            (cfg.f64("ratings.guide_dynamic_load_rating_n").unwrap() - 4.0 * 30000.0 * 2.0_f64.cbrt()).abs() < 1e-6
+        );
+        assert_eq!(cfg.f64("ratings.guide_max_load_n").unwrap(), 4.0 * 40000.0 / GUIDE_STATIC_SAFETY);
+    }
+}

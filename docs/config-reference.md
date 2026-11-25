@@ -240,7 +240,7 @@ One table per linear guide. `[friction_z]` exists on the T-gantry only (T E). On
 | `bristle_stiffness_n_m` | T E S | N/m | LuGre bristle stiffness σ₀ | estimate | `guide_friction` |
 | `bristle_damping_n_s_m` | T E S | N s/m | LuGre bristle damping σ₁ | estimate | `guide_friction` |
 | `preload_n` | T E S | N | Guide preload. The friction levels scale with (preload + load) | estimate | `load_dependent_friction` |
-| `seal_drag_n` | | N | Optional: the part of `coulomb_n` and `stiction_n` that is the guide carriages' seals. A guide set named as axis (`parts.axis`) puts its seals' drag (HIWIN's printed maximum of two end seals per carriage, times the carriages) in its place in both levels, and here; in `[friction]` of the linear delta and in `[slide]` (`friction_coulomb_n`, `friction_breakaway_n`) alike where the config has no `[friction_x]`. Absent = 0: the levels hold no seal drag, and the named one is added | catalogue (named guide) | `guide_friction` |
+| `seal_drag_n` | | N | Optional: the part of `coulomb_n` and `stiction_n` that is the guide carriages' seals. A guide set named as axis (`parts.axis`) puts its seals' drag (HIWIN's printed maximum of two end seals per carriage, times the carriages; a guide row that prints none, Rexroth's and THK's, leaves the levels as they are) in its place in both levels, and here; in `[friction]` of the linear delta and in `[slide]` (`friction_coulomb_n`, `friction_breakaway_n`) alike where the config has no `[friction_x]`. Absent = 0: the levels hold no seal drag, and the named one is added | catalogue (named guide) | `guide_friction` |
 
 Festo gives the friction of the EXCT only as a graph of torque over speed, so all of these are estimates in E.
 
