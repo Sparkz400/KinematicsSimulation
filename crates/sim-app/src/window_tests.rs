@@ -1519,6 +1519,95 @@ fn closing_the_window_over_edits_asks_first() {
     d.wait("the app exits", |d| d.app.should_exit().is_some());
 }
 
+/// Opening a config over edits asks first, with the file typed in the field: Cancel keeps the edits and the old file;
+/// Save writes the file the config was last opened from (not the one typed, which is then opened as it was); Discard
+/// opens at once. (The button with the file dialog takes the same road: it only names the file another way.)
+#[test]
+fn opening_a_file_over_edits_asks_first() {
+    let mut d = Driver::new();
+    d.tab("ui-config");
+    let dir = std::env::temp_dir();
+    let [old, next] = ["old", "next"].map(|n| dir.join(format!("window-open-{n}-{}.toml", std::process::id())));
+    let text = d.state().model.entry.default_config;
+    std::fs::write(&old, text).unwrap();
+    std::fs::write(&next, text).unwrap();
+    let (old, next) = (old.display().to_string(), next.display().to_string());
+    let (path, _, new) = edit_a_parameter(&mut d);
+    // The config stands for the old file; another path is typed in the field.
+    d.state_mut().model.file = old.clone();
+    d.state_mut().model.inputs.config_file = next.clone();
+    d.button_of("ui-config-open");
+    d.wait("the question", |d| d.state().ask.is_some());
+    d.frames(5);
+    assert_eq!(d.state().model.file, old, "not opened before the answer");
+    d.button_of("ui-unsaved-cancel");
+    d.wait("the question gone", |d| d.state().ask.is_none());
+    d.frames(5);
+    let model = &d.state().model;
+    assert_eq!((model.file.as_str(), model.config.f64(&path).ok()), (old.as_str(), Some(new)));
+    assert!(model.dirty());
+    // Save: the old file takes the edits, the one typed stays as it is, and is opened.
+    d.button_of("ui-config-open");
+    d.wait("the question again", |d| d.state().ask.is_some());
+    // The Config tab has a Save button too: the question's is the one outside the setup panel.
+    let label = d.tr("ui-unsaved-save");
+    let panel: Vec<_> = d.in_region(SETUP, Role::Button).into_iter().map(|w| w.rect).collect();
+    let save =
+        d.widgets().into_iter().find(|w| w.label == label && !panel.contains(&w.rect)).expect("the question's Save");
+    d.click_at(Vec2::new(save.rect.center().x, save.rect.center().y));
+    d.wait("the file typed opened", |d| d.state().model.file == next);
+    let saved = sim_core::Config::parse(&std::fs::read_to_string(&old).unwrap()).unwrap();
+    assert_eq!(saved.f64(&path).unwrap(), new, "the old file has the edits");
+    assert_eq!(std::fs::read_to_string(&next).unwrap(), text, "the file to open was written over");
+    assert!(!d.state().model.dirty() && d.state().model.config.f64(&path).unwrap() != new);
+    assert_eq!(d.state().model.inputs.config_file, next);
+    // Discard: opens the file typed, the old one stays as saved.
+    edit_a_parameter(&mut d);
+    d.state_mut().model.inputs.config_file = old.clone();
+    d.button_of("ui-config-open");
+    d.wait("the question a third time", |d| d.state().ask.is_some());
+    d.button_of("ui-unsaved-discard");
+    d.wait("the old file opened", |d| d.state().model.file == old && !d.state().model.dirty());
+    assert_eq!(std::fs::read_to_string(&next).unwrap(), text, "the discarded edits were saved");
+    assert_eq!(d.state().model.config.f64(&path).unwrap(), new, "the saved file's value");
+}
+
+/// A JSON machine file is remembered for the next start: the settings hold its path, `restore` opens it again, and
+/// Save (also the one the question over edits asks for) does not take it as the place to write TOML.
+#[test]
+fn a_json_machine_file_is_remembered_between_starts() {
+    fn json(value: &toml::Value) -> String {
+        match value {
+            toml::Value::Table(t) => {
+                let items: Vec<String> =
+                    t.iter().map(|(k, v)| format!("{}:{}", json(&k.as_str().into()), json(v))).collect();
+                format!("{{{}}}", items.join(","))
+            }
+            toml::Value::Array(a) => format!("[{}]", a.iter().map(json).collect::<Vec<_>>().join(",")),
+            toml::Value::String(s) => format!("{s:?}"),
+            other => other.to_string(),
+        }
+    }
+    let shipped = concat!(env!("CARGO_MANIFEST_DIR"), "/../../machines/h-bot.toml");
+    let table: toml::Table = std::fs::read_to_string(shipped).unwrap().parse().unwrap();
+    let file = std::env::temp_dir().join(format!("window-machine-{}.json", std::process::id()));
+    std::fs::write(&file, json(&toml::Value::Table(table))).unwrap();
+    let file = file.display().to_string();
+    let mut d = Driver::new();
+    d.state_mut().model.open_config(&file);
+    let model = &d.state().model;
+    assert_eq!((model.entry.id, model.file.as_str()), ("h-bot", file.as_str()), "{:?}", model.messages);
+    assert_eq!(model.inputs.config_file, "", "Save would write TOML over the JSON file");
+    assert_eq!(model.save_target(), None);
+    let stored = settings_of(d.state());
+    assert_eq!(stored.config_file.as_deref(), Some(file.as_str()));
+    // The next start: another machine shown, the file opened over it.
+    let mut again = Model::new(MACHINES[0], "en");
+    restore(&mut again, &stored);
+    assert_eq!((again.entry.id, again.file.as_str()), ("h-bot", file.as_str()), "{:?}", again.messages);
+    assert!(!again.dirty());
+}
+
 /// The filter narrows the parameters to those whose label or dotted path hold it: with a path typed, its group is
 /// there and another is not.
 #[test]
@@ -1551,4 +1640,18 @@ fn a_motor_is_picked_from_the_catalogue_list() {
     d.click_at(Vec2::new(list.rect.center().x, list.rect.center().y));
     d.click(Role::Button, first);
     d.wait("the article in the field", |d| d.state().model.inputs.parts[0] == first);
+}
+
+/// The belt has a catalogue list too (it had none): the fifth of the parts' lists, from the top, names the belts by
+/// profile and width; a name picked lands in the field.
+#[test]
+fn a_belt_is_picked_from_the_catalogue_list() {
+    let mut d = Driver::new();
+    d.tab("ui-config");
+    let belt = sim_components::catalog::belt_names().into_iter().find(|name| name.starts_with("AT5-")).unwrap();
+    let lists = d.in_region(SETUP, Role::ComboBox);
+    let list = lists.get(4).expect("the belt's list");
+    d.click_at(Vec2::new(list.rect.center().x, list.rect.center().y));
+    d.click(Role::Button, &belt);
+    d.wait("the belt in the field", |d| d.state().model.inputs.parts[4] == belt);
 }

@@ -160,7 +160,12 @@ fn main() {
                 None => eprintln!("{}", help::text(&tr, None).unwrap_or_default()),
             }
         } else {
-            eprintln!("{}{}", tr.tr_arg(key, &arg), config_help(&args, &tr, key, &arg));
+            // The failing checks by their labels, not their ids (the unit of a linear motor's speed is not known here).
+            let shown = match key {
+                "error-cycle-fails-already" => sim_components::report::check_labels(&arg, false, &tr),
+                _ => arg.clone(),
+            };
+            eprintln!("{}{}", tr.tr_arg(key, &shown), config_help(&args, &tr, key, &arg));
         }
         std::process::exit(2);
     }

@@ -1186,6 +1186,14 @@ fn the_app_optimises_the_cycle_and_applies_the_settings(entry: &'static MachineE
         // The refusal has a key of its own (`error-cycle-fails-already`), with the failing checks as its detail.
         let refusal = model.messages.iter().find(|m| m.0 == "error-cycle-fails-already");
         assert!(refusal.is_some_and(|m| !m.1.is_empty()), "{}: {:?}", entry.id, model.messages);
+        // Shown by the checks' labels, not their ids ("residual-sway").
+        let shown = model.tr.tr_arg("error-cycle-fails-already", &refusal.unwrap().1);
+        let failing: Vec<_> = judged.iter().filter(|v| !v.ok).collect();
+        let label = |check: &str| model.tr.tr(&model.check_key(check, None)).to_string();
+        assert!(failing.iter().any(|v| shown.contains(&label(v.check))), "{}: {shown}", entry.id);
+        for v in failing.iter().filter(|v| !label(v.check).contains(v.check)) {
+            assert!(!shown.contains(v.check), "{}: the id {} is shown: {shown}", entry.id, v.check);
+        }
         return;
     }
     // At least 5 % shorter; 2 % where the cycle as configured leaves less than a tenth of the settling tolerance, which
