@@ -711,7 +711,7 @@ impl Controller {
             path: cfg.non_negative("profile.path_tolerance_m")?,
             corner: cfg.non_negative("profile.corner_tolerance_m")?,
         };
-        // 1 where a config (an older machine file) leaves it out; 2 is this simulator's limit (Sinumerik and LinuxCNC's
+        // 1 where a config leaves it out (no shipped one has it); 2 is this simulator's limit (Sinumerik and LinuxCNC's
         // override switches go to 200 %), not a vendor figure.
         let feed_override =
             if cfg.get("profile.feed_override").is_ok() { cfg.f64("profile.feed_override")? } else { 1.0 };

@@ -93,7 +93,7 @@ fn portal_plan(program: &str, set: &[&str]) -> (Vec<(f64, Vec<f64>)>, Vec<f64>) 
     let entry = file("xyz-portal.toml");
     let mut cfg = entry.config();
     for assignment in set {
-        cfg.set_text(assignment).unwrap();
+        sim_components::set_config_text(entry, &mut cfg, assignment).unwrap();
     }
     let sim = Sim::new(entry, &cfg).unwrap();
     let start = sim.control.planned_pos().to_vec();
@@ -219,7 +219,7 @@ fn g4_holds_the_pose_for_its_time() {
 /// `profile.feed_override` scales the feed of G1 moves, never the machine's limits, and G0 not at all. G91 F3000 G1
 /// X400 (0.4 m at 0.05 m/s): the cruise at 0.05 m/s lasts (0.4 - 0.05 t) / 0.05 = 7.96 s (t = 2 sqrt(0.05 / 100) = 45 ms,
 /// the ramp up and down to a speed at the jerk 100 m/s^3), at override 0.5 and 0.025 m/s (0.4 - 0.025 t) / 0.025 =
-/// 15.97 s: twice as long within 1 %. 1.0 is the plan of the config's own 1.0 (the factor is a multiplication by 1). At
+/// 15.97 s: twice as long within 1 %. 1.0, set on a config without the key (as `--set` does), is the plan without it. At
 /// F60000 (1 m/s, above X's 0.8 m/s) override 2.0 asks 2 m/s and the plan stays at the axis limit. A G0 plan is the
 /// same at every override. A RAPID MoveL at v100 (0.1 m/s) runs at 0.05 m/s at 0.5. A value of 0 or below, or above
 /// 2, is refused naming the key.
@@ -249,7 +249,7 @@ fn feed_override_scales_the_feed_within_the_machines_limits() {
     assert_eq!(rapid, portal_plan("G91 G0 X400", &["profile.feed_override = 0.5"]).0);
     let entry = file("xyz-portal.toml");
     let mut cfg = entry.config();
-    cfg.set_text("profile.feed_override = 0.5").unwrap();
+    sim_components::set_config_text(entry, &mut cfg, "profile.feed_override = 0.5").unwrap();
     let sim = Sim::new(entry, &cfg).unwrap();
     let module = "MODULE m\n PROC main()\n  MoveL [[250,200,250],[1,0,0,0],[0,0,0,0],[9E9,9E9,9E9,9E9,9E9,9E9]], v100, \
                   fine, tool0;\n ENDPROC\nENDMODULE";
@@ -258,7 +258,7 @@ fn feed_override_scales_the_feed_within_the_machines_limits() {
     assert!((peak - 0.05).abs() < 1e-9, "{peak} m/s");
     for bad in ["0.0", "-1.0", "2.5"] {
         let mut cfg = entry.config();
-        cfg.set_text(&format!("profile.feed_override = {bad}")).unwrap();
+        sim_components::set_config_text(entry, &mut cfg, &format!("profile.feed_override = {bad}")).unwrap();
         let error = Sim::new(entry, &cfg).err().unwrap_or_else(|| panic!("{bad} was taken"));
         assert!(format!("{error:?}").contains("profile.feed_override"), "{bad}: {error:?}");
     }

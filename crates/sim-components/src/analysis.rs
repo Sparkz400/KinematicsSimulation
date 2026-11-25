@@ -1473,7 +1473,7 @@ pub fn any_not_finite<'a>(verdicts: impl IntoIterator<Item = &'a Verdict>) -> bo
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 87] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 88] = [
     // A guide's moment ratings (Mx, My, Mz), which its equivalent load takes where a machine gives the moments.
     "ratings.guide_moment_x_nm",
     "ratings.guide_moment_y_nm",
@@ -1524,6 +1524,8 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 87] = [
     // How fast a robot program turns the tool (`program::read_with`).
     "program",
     "program.orientation_speed_rad_s",
+    // The factor on a program's programmed feeds, 1 without it (`control::Controller::feed_override`).
+    "profile.feed_override",
     "ratings.settling_tolerance_rad",
     "ratings.pulley_max_torque_nm",
     "ratings.motor_bearing_load_rating_n",
