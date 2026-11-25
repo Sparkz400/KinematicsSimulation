@@ -1611,6 +1611,20 @@ fn a_json_machine_file_is_remembered_between_starts() {
     assert!(!again.dirty());
 }
 
+/// `--set` at the start keeps the file the config was opened from (`--machine-file`, or the one of the last start), so
+/// that the next start opens it again.
+#[test]
+fn values_set_at_the_start_keep_the_file_opened() {
+    let mut model = Model::new(MACHINES[0], "en");
+    let file = std::env::temp_dir().join(format!("window-set-{}.toml", std::process::id()));
+    std::fs::write(&file, model.entry.default_config).unwrap();
+    let file = file.display().to_string();
+    model.open_config(&file);
+    let (path, value) = model.config.leaves().into_iter().find_map(|(p, v)| v.as_float().map(|f| (p, f))).unwrap();
+    model.set_at_start(&[format!("{path} = {value:?}")]).unwrap();
+    assert_eq!((model.file.as_str(), model.inputs.config_file.as_str()), (file.as_str(), file.as_str()));
+}
+
 /// The filter narrows the parameters to those whose label or dotted path hold it: with a path typed, its group is
 /// there and another is not.
 #[test]
