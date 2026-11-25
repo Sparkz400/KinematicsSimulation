@@ -58,7 +58,7 @@ cli-fit-write-lumped = Nicht geschrieben: { $arg } ist ein Wert der Aufzeichnung
 cli-fit-write-no-key = Nicht geschrieben: { $arg }: die Konfiguration hat diesen Schlüssel nicht.
 cli-fit-write-by-part = Nicht geschrieben: { $arg }: ein in der Konfiguration genanntes Bauteil setzt diesen Schlüssel, ein hineingeschriebener Wert würde überschrieben.
 cli-fit-write-refused = Nicht geschrieben: { $arg }: der angepasste Wert oder sein Fehler wird von der Maschine nicht angenommen.
-cli-fit-write-nothing = Nichts nach { $arg } geschrieben: kein angepasster Wert ist ein Schlüssel der Konfiguration (nur der Faktor von --stiffness ist es).
+cli-fit-write-nothing = Nichts nach { $arg } geschrieben: kein angepasster Wert ist ein Schlüssel der Konfiguration (nur der Faktor von --stiffness und der Faktor der Last einer Gelenkanpassung sind es).
 cli-fit-write-done = Konfiguration geschrieben: { $arg }
 
 cli-sensitivity-zero = Nicht eingeordnet: { $arg } ist 0 und hat keinen Bereich in [bounds] (--delta von 0 ist 0); dort einen angeben, um ihn zu variieren.

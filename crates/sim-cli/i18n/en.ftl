@@ -58,7 +58,7 @@ cli-fit-write-lumped = Not written: { $arg } is a value of the trace that severa
 cli-fit-write-no-key = Not written: { $arg }: the config has no such key.
 cli-fit-write-by-part = Not written: { $arg }: a part named in the config sets that key, so a value written to it would be overwritten.
 cli-fit-write-refused = Not written: { $arg }: the fitted value or its error is not one the machine accepts.
-cli-fit-write-nothing = Nothing written to { $arg }: no fitted value is one key of the config (only the factor of --stiffness is).
+cli-fit-write-nothing = Nothing written to { $arg }: no fitted value is one key of the config (only the factor of --stiffness and the payload's factor of a joint fit are).
 cli-fit-write-done = Config written: { $arg }
 
 cli-sensitivity-zero = Not ranked: { $arg } is 0 and has no range in [bounds] (--delta of 0 is 0); give it one there to vary it.

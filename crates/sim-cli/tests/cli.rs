@@ -1707,6 +1707,31 @@ fn fit_write_puts_the_fitted_stiffness_and_its_band_in_a_config_file() {
     assert_eq!(fit(&["--sigmas", "3"]).status.code(), Some(2));
 }
 
+/// `fit --write` on a joint fit writes the payload's factor into the payload's mass (`identify::payload_keys`: the
+/// delta's is a point mass, its one key), by hand from the table's row: the config's 3 kg times fitted / config, the
+/// bound 2 standard errors (relative to the config's factor) either side; the row is not named as not written. What the
+/// factor comes out at is the fit's matter (`fit_joints` tests), not this test's: from the cycle alone it is poorly known.
+#[test]
+fn fit_write_puts_a_joint_fits_payload_factor_into_the_payload_mass() {
+    use sim_components::{analysis::bounds, load_config};
+    let entry = sim_machines::find("delta-d3").unwrap();
+    let (trace, written) = (scratch(entry, "payload-trace.csv"), scratch(entry, "payload.toml"));
+    let run = cli(&["run", entry.id, "--cycle", "--time", "4", "--out", &trace, "--set", "mass.payload_kg=4.0"]);
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let out = cli(&["fit", entry.id, "--trace", &trace, "--write", &written]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    let row: Vec<&str> = stdout.lines().find(|l| l.starts_with("payload_factor,")).unwrap().split(',').collect();
+    let [config, fitted, error] = [2, 3, 4].map(|c| row[c].parse::<f64>().unwrap());
+    let loaded = load_config(entry, &std::fs::read_to_string(&written).unwrap()).unwrap();
+    let value = loaded.f64("mass.payload_kg").unwrap();
+    assert!((value / (3.0 * fitted / config) - 1.0).abs() < 1e-6, "{value} from {row:?}");
+    let (_, low, high) = bounds(&loaded).unwrap().into_iter().find(|b| b.0 == "mass.payload_kg").unwrap();
+    let half = 2.0 * 3.0 * error / config;
+    assert!((high - value - half).abs() < 1e-3 * half && (value - low - half).abs() < 1e-3 * half, "{low} {high}");
+    assert!(!text(&out.stderr).contains("Not written: payload_factor"), "{}", text(&out.stderr));
+}
+
 /// A config file is checked against the machine's default config: a misspelt key was ignored and the
 /// default's value used in its place. It is refused by name; the default config as a file passes.
 #[test]

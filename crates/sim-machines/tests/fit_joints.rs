@@ -516,3 +516,23 @@ fn a_cam_whose_inertia_varies_is_not_fitted_per_axis() {
         assert!(!per_axis_fit((entry.build)(&entry.config()).unwrap().as_ref()), "{name}");
     }
 }
+
+/// The keys `fit --write` scales by the payload's factor (`identify::payload_keys`): the delta's payload mass (a point
+/// mass: its inertia follows from the mass and the offset, which is a position and is not scaled), checked on the
+/// machine itself (doubled, the payload's rigid torque doubles and nothing else changes); none where the payload is
+/// switched off, as it then adds no torque to scale. The SCARA's is refused by that check (measured 25 November 2026):
+/// with `arm.payload_kg` doubled what the payload adds at joint 4, the tool's turn, stays 6.4e-6 N m (its inertia there
+/// comes from no `payload…` key) and at joint 1 is 0.5 % short of twice, so its factor is not written.
+#[test]
+fn the_payload_factor_scales_the_payload_mass_alone() {
+    use sim_components::identify::payload_keys;
+    for (id, expected) in [("delta-d3", Some(vec!["mass.payload_kg".to_string()])), ("scara", None)] {
+        let entry = sim_machines::find(id).unwrap();
+        let cfg = sim_components::catalog::resolve(entry, &entry.config()).unwrap();
+        assert_eq!(payload_keys(entry, &cfg), expected, "{id}");
+        let mut off = cfg.clone();
+        off.set_text("effects.payload = false").unwrap();
+        assert_eq!(payload_keys(entry, &off), None, "{id}");
+    }
+}
+

@@ -687,8 +687,11 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
 struct FitRow {
     quantity: String,
     of: String,
+    config: f64,
     fitted: f64,
     error: f64,
+    /// The value stands for others too (`JointValue::combines`): not its own.
+    combined: bool,
 }
 
 /// The table of `fit` as it is written: with `--within` two columns more, how many standard errors the fitted value is
@@ -722,8 +725,8 @@ impl FitTable<'_> {
     }
 
     fn note(&mut self, quantity: &str, of: &str, values: Option<[f64; 3]>) {
-        if let Some([_, fitted, error]) = values {
-            self.rows.push(FitRow { quantity: quantity.into(), of: of.into(), fitted, error });
+        if let Some([config, fitted, error]) = values {
+            self.rows.push(FitRow { quantity: quantity.into(), of: of.into(), config, fitted, error, combined: false });
         }
     }
 }
@@ -751,6 +754,9 @@ fn fit_rows(
                 for v in &fit.values {
                     let line = format!("{},{},{:.6e},{:.6e},{:.3e},", v.quantity, v.of, v.config, v.fitted, v.error);
                     table.row(line, v.quantity, &v.of, Some([v.config, v.fitted, v.error]))?;
+                    if let Some(row) = table.rows.last_mut() {
+                        row.combined = !v.combines.is_empty();
+                    }
                 }
                 // One step's row is of `payload`, several are numbered as their factors after them are.
                 for (j, (time, error)) in fit.payload_steps.iter().enumerate() {
@@ -845,12 +851,14 @@ fn fit_rows(
     Ok((advice, result, table.rows))
 }
 
-/// `fit --write FILE`: the config as the command line gives it, with each fitted quantity that is one key of it set to
-/// the fitted value and a `[bounds]` entry of `sigmas` standard errors either side of it. Only the factor on a
-/// stiffness (`--stiffness`) is one key; every other quantity of the table is the trace's value of what several keys
-/// make up (the moved mass of an axis, a friction that the motor, gearbox and guide share) or of none, and is named on
-/// the error stream with the reason, as is a key the file cannot take. Comments of the written file are not kept
-/// (`Config::to_text`).
+/// `fit --write FILE`: the config as the command line gives it, with each fitted quantity that is a factor on keys of
+/// it applied to them and a `[bounds]` entry of `sigmas` standard errors either side of each. Two are: the factor on a
+/// stiffness (`--stiffness`, its key), and the factor on the payload of `fit_joints` where it stands for nothing else
+/// (`JointValue::combines` empty), on the keys `identify::payload_keys` finds the payload to scale with exactly (its mass
+/// and inertia, as the fitted factor is fitted/config of the replay). Every other quantity of the table is the trace's
+/// value of what several keys make up (the moved mass of an axis, a friction that the motor, gearbox and guide share) or
+/// of none, and is named on the error stream with the reason, as is a key the file cannot take. Comments of the written
+/// file are not kept and its keys come in alphabetical order (`Config::to_text`).
 fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas: f64) -> Result<(), Failure> {
     let (entry, resolved) = machine_and_config(args)?;
     // What the file holds: the config before the parts it names are put in, so that those stay named.
@@ -861,13 +869,22 @@ fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas
     let mut written = Vec::new();
     for row in rows {
         let name = format!("{} {}", row.quantity, row.of);
-        if row.quantity != "stiffness_factor" {
+        let keys = match row.quantity.as_str() {
+            "stiffness_factor" => Some(vec![row.of.clone()]),
+            "payload_factor" if !row.combined => sim_components::identify::payload_keys(entry, &resolved),
+            _ => None,
+        };
+        let Some(keys) = keys else {
             eprintln!("{}", tr.tr_arg("cli-fit-write-lumped", &name));
             continue;
-        }
-        match fitted_band(entry, &file, &resolved, row, sigmas) {
-            Ok(band) => written.push((row.of.clone(), band)),
-            Err(reason) => eprintln!("{}", tr.tr_arg(reason, &name)),
+        };
+        // The factor and its error relative to the config's own (1 for the stiffness, the replay's for the payload).
+        let (factor, error) = (row.fitted / row.config, row.error / row.config.abs());
+        for key in keys {
+            match fitted_band(entry, &file, &resolved, &key, factor, error, sigmas) {
+                Ok(band) => written.push((key, band)),
+                Err(reason) => eprintln!("{}", tr.tr_arg(reason, &format!("{name} ({key})"))),
+            }
         }
     }
     if written.is_empty() {
@@ -875,17 +892,11 @@ fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas
     }
     for (key, [value, low, high]) in &written {
         sim_components::analysis::set_bounded(&mut file, key, *value)?;
-        // `Config::set` changes a key and never adds one: a bound the file has not got yet is added to its text below.
-        if file.get(&format!("bounds.{key}")).is_ok() {
-            file.set_text(&format!("bounds.{key} = [{low:?}, {high:?}]"))?;
-        }
+        let bound = format!("bounds.{key}");
+        // A bound the file has not got yet is added.
+        file.set_text_within(&format!("{bound} = [{low:?}, {high:?}]"), &file.clone(), &[bound.as_str()])?;
     }
-    let mut text = file.to_text()?;
-    for (key, [_, low, high]) in &written {
-        if file.get(&format!("bounds.{key}")).is_err() {
-            text = with_bound(&text, key, *low, *high);
-        }
-    }
+    let text = file.to_text()?;
     // What is written has to load again, with its bounds read.
     let loaded = sim_components::load_config(entry, &text)?;
     sim_components::analysis::bounds(&loaded)?;
@@ -894,18 +905,20 @@ fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas
     Ok(())
 }
 
-/// The value of the key a stiffness factor was fitted on and its band `[low, high]`, or the translation key of why it is
-/// not written: the file has no such key (`cli-fit-write-no-key`), a named part sets it (the file's value is not the
-/// one the fit used: `cli-fit-write-by-part`), or the fitted value or its error is not usable (`cli-fit-write-refused`).
-/// A value or bound the machine's readers refuse (a stiffness at or below 0) is pulled in to the nearest one they take.
+/// The value `factor` times that of `key` and its band `[low, high]` of `sigmas` times `error` (relative) either side,
+/// or the translation key of why it is not written: the file has no such key (`cli-fit-write-no-key`), a named part
+/// sets it (the file's value is not the one the fit used: `cli-fit-write-by-part`), or the fitted value or its error is
+/// not usable (`cli-fit-write-refused`). A value or bound the machine's readers refuse (a stiffness at or below 0) is
+/// pulled in to the nearest one they take.
 fn fitted_band(
     entry: &'static MachineEntry,
     file: &Config,
     resolved: &Config,
-    row: &FitRow,
+    key: &str,
+    factor: f64,
+    error: f64,
     sigmas: f64,
 ) -> Result<[f64; 3], &'static str> {
-    let key = row.of.as_str();
     let (Ok(base), Ok(own)) = (resolved.f64(key), file.f64(key)) else { return Err("cli-fit-write-no-key") };
     if (own - base).abs() > 1e-9 * base.abs() {
         return Err("cli-fit-write-by-part");
@@ -915,8 +928,8 @@ fn fitted_band(
         sim_components::analysis::set_bounded(&mut at, key, v).is_ok()
             && sim_components::catalog::resolve(entry, &at).and_then(|r| (entry.build)(&r)).is_ok()
     };
-    let value = base * row.fitted;
-    if !(row.error.is_finite() && row.error > 0.0 && value.is_finite() && builds(value)) {
+    let value = base * factor;
+    if !(error.is_finite() && error > 0.0 && value.is_finite() && builds(value)) {
         return Err("cli-fit-write-refused");
     }
     // Halving between the value and the bound found refused: the bound is the nearest one that builds.
@@ -931,22 +944,8 @@ fn fitted_band(
         }
         good
     };
-    let half = sigmas * base * row.error;
+    let half = sigmas * base.abs() * error;
     Ok([value, taken(value - half), taken(value + half)])
-}
-
-/// `text` (a config) with `key = [low, high]` under `[bounds]`, where the config has no entry for it yet.
-fn with_bound(text: &str, key: &str, low: f64, high: f64) -> String {
-    let (parent, leaf) = key.rsplit_once('.').unwrap_or(("", key));
-    let header = if parent.is_empty() { "[bounds]".to_string() } else { format!("[bounds.{parent}]") };
-    let entry = format!("{leaf} = [{low:?}, {high:?}]\n");
-    match text.find(&format!("\n{header}\n")) {
-        Some(at) => {
-            let end = at + header.len() + 2;
-            format!("{}{entry}{}", &text[..end], &text[end..])
-        }
-        None => format!("{text}\n{header}\n{entry}"),
-    }
 }
 
 /// The trace named by `--trace`: through the mapping file `--map` (a vendor export; see

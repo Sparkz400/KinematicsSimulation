@@ -165,5 +165,14 @@ fn the_ball_screw_report_gives_the_documented_figures() {
     }
     let md = std::fs::read_to_string(report.join("report.md")).unwrap();
     assert!(md.contains("| s-profile-v300.csv | fit | 1 |") && md.contains("![s-profile-v300.csv, motor 1]"), "{md}");
+    // The "Fitted on" table has a row per row of fit.csv (it read five cells of its six and stayed empty), the moved
+    // mass's with its distance by hand from the CSV's own figures: |fitted - config| / error, to one decimal.
+    let row = fit.iter().find(|r| r[0] == "moved_mass_kg").unwrap();
+    let [config, fitted, error] = [2, 3, 4].map(|c| row[c].parse::<f64>().unwrap());
+    let apart = (fitted - config).abs() / error;
+    let shown = format!("| moved_mass_kg | {} | {config:.4} | {fitted:.4} | {error:.3} | {apart:.1} |", row[1]);
+    assert!(md.contains(&shown), "{shown} not in\n{md}");
+    let table = md.split("| Quantity | Of | Config | Fitted | Standard error | Apart |").nth(1).unwrap();
+    assert_eq!(table.lines().skip(2).take_while(|l| l.starts_with('|')).count(), fit.len(), "{table}");
     assert!(report.join("s-profile-v300-torque-1.svg").exists() && report.join("bounds.csv").exists());
 }
