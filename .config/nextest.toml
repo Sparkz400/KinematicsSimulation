@@ -791,10 +791,11 @@ priority = 50
 [profile.ci]
 slow-timeout = { period = "60s", terminate-after = 30 }
 
-# CI's long sweeps, one at a time: the slowest takes 12.5 minutes on 16 threads (16 November 2026), an estimated 46
-# on a runner's 4 cores, so the limit is 90 minutes.
+# CI's long sweeps, one at a time, weekly and by hand: the slowest took 12.5 minutes on 16 threads (16 November 2026);
+# since the margins are measured at every pose of the cycle (22 November) a group ran past 2 hours on a runner, so a
+# test may take up to 5 hours 30, inside the job's 355 minutes.
 [profile.ci-sweeps]
-slow-timeout = { period = "60s", terminate-after = 90 }
+slow-timeout = { period = "60s", terminate-after = 330 }
 
 # Every test but the margin sweeps and the EXCT-30's worst corner, which CI runs one at a time in a step of their own
 # (`cargo nextest run --workspace --release --exclude sim-py --ignore-default-filter -E "not default()" --test-threads 1`
