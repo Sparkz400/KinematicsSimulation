@@ -1075,7 +1075,8 @@ mod tests {
     fn a_ranking_is_one_criterion_or_a_weighted_mix() {
         assert_eq!(parse_ranking("energy"), Some(vec![(Criterion::Energy, 1.0)]));
         assert_eq!(parse_ranking("cost=1, error=0.5"), Some(vec![(Criterion::Cost, 1.0), (Criterion::Error, 0.5)]));
-        assert_eq!(parse_ranking("price"), None);
+        assert_eq!(parse_ranking("price"), Some(vec![(Criterion::Price, 1.0)]));
+        assert_eq!(parse_ranking("weight"), None);
         assert_eq!(parse_ranking("cost=-1"), None);
     }
 
