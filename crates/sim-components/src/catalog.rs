@@ -1123,6 +1123,16 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
 pub const DRIVE_CONDITION_KEYS: [&str; 3] =
     ["ratings.drive_ambient_c", "ratings.drive_altitude_m", "ratings.drive_pulse_frequency_hz"];
 
+/// The first installation condition (`DRIVE_CONDITION_KEYS`) a config gives though it names no catalogue drive in
+/// `[parts]` or a motor's `[parts.<id>]`: its drive is hand-entered, the condition would derate nothing and the drive
+/// would be judged at its rated condition. Read from the config as written: `resolve` empties the names.
+pub fn condition_without_drive(cfg: &Config) -> Option<&'static str> {
+    let named = |v: Option<&toml::Value>| v.and_then(|v| v.as_str()).is_some_and(|name| !name.is_empty());
+    let parts = cfg.get("parts").ok().and_then(|p| p.as_table());
+    let any = parts.is_some_and(|p| named(p.get("drive")) || p.values().any(|own| named(own.get("drive"))));
+    DRIVE_CONDITION_KEYS.into_iter().find(|key| !any && cfg.get(key).is_ok())
+}
+
 /// Linear interpolation through `points` (x, y), the value of the first or last point beyond them; 1 for no points.
 fn interpolate(mut points: Vec<(f64, f64)>, x: f64) -> f64 {
     points.sort_by(|a, b| a.0.total_cmp(&b.0));

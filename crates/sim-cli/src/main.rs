@@ -385,12 +385,31 @@ fn machine(args: &Args) -> Result<&'static MachineEntry, Failure> {
 /// `--set path=value` applied on top.
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
     let (entry, cfg) = named_config(args)?;
-    // Parts by name from the catalogue, here and not only in the simulator, so that single values can be set on top.
-    let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
-    for assignment in args.options("--set") {
+    // Only a catalogue drive is derated; the search puts one in for every candidate.
+    if args.positional(0) != Some("search")
+        && let Some(key) = sim_components::catalog::condition_without_drive(&cfg)
+    {
+        return Err(Failure("error-drive-derating-none", key.to_string()));
+    }
+    Ok((entry, resolved_with_sets(args, entry, cfg)?))
+}
+
+/// The config with its parts put in from the catalogue (`catalog::resolve`), here and not only in the simulator, so
+/// that single values can be set on top by `--set`; a drive's installation conditions are set before, so that the
+/// drive is derated by them (`catalog::apply_drive`).
+fn resolved_with_sets(args: &Args, entry: &'static MachineEntry, mut cfg: Config) -> Result<Config, Failure> {
+    let (conditions, values): (Vec<&str>, Vec<&str>) = args.options("--set").into_iter().partition(|assignment| {
+        let path = assignment.split_once('=').map_or("", |(path, _)| path.trim());
+        sim_components::catalog::DRIVE_CONDITION_KEYS.contains(&path)
+    });
+    for assignment in conditions {
         cfg.set_text(assignment)?;
     }
-    Ok((entry, cfg))
+    let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
+    for assignment in values {
+        cfg.set_text(assignment)?;
+    }
+    Ok(cfg)
 }
 
 /// The machine and its config with the parts the command line names in `[parts]`, before they are resolved.
@@ -1315,11 +1334,7 @@ fn duties(args: &Args, entry: &'static MachineEntry) -> Result<Vec<(Config, f64)
                 cfg.set_text(&format!("parts.{key} = {name:?}"))?;
             }
         }
-        let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
-        for assignment in args.options("--set") {
-            cfg.set_text(assignment)?;
-        }
-        out.push((cfg, weight));
+        out.push((resolved_with_sets(args, entry, cfg)?, weight));
     }
     Ok(out)
 }

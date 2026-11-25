@@ -2359,6 +2359,32 @@ fn search_prices_a_candidate_from_the_users_list_and_says_what_it_lacks() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A drive's installation condition set with `--set` derates the drive named: the S210 6SL3210-5HE11-5UF0 (5 A rated) at
+/// 4000 m and 40 degC gives 90 % (Table 12-9), so `drive-current` is judged against 4.5 A, not 5 A; the file has the key
+/// at the rated 1000 m. With no drive part named the drive is the config's own by hand, which the condition cannot
+/// derate: refused with exit 2, naming the key.
+#[test]
+fn a_drive_condition_set_on_the_command_line_derates_the_named_drive_and_a_hand_entered_one_is_refused() {
+    let entry = MACHINES[1];
+    let file = std::env::temp_dir().join(format!("sim-cli-derate-{}.toml", std::process::id()));
+    let text_of = entry.default_config.replacen("[ratings]\n", "[ratings]\ndrive_altitude_m = 1000.0\n", 1);
+    std::fs::write(&file, text_of).unwrap();
+    let config = file.to_str().unwrap();
+    let limit = |extra: &[&str]| {
+        let base = ["verdicts", entry.id, "--config", config, "--motor", "1FK2104-5AK", "--drive", "6SL3210-5HE11-5UF0"];
+        let out = cli(&[&base[..], extra].concat());
+        let table = text(&out.stdout);
+        let row = table.lines().find(|l| l.starts_with("drive-current,")).unwrap_or_else(|| panic!("{}", text(&out.stderr)));
+        row.split(',').nth(3).unwrap().parse::<f64>().unwrap()
+    };
+    assert_eq!(limit(&[]), 5.0);
+    assert_eq!(limit(&["--set", "ratings.drive_altitude_m=4000"]), 4.5);
+    let hand = cli(&["verdicts", entry.id, "--config", config]);
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(hand.status.code(), Some(2), "{}", text(&hand.stderr));
+    assert!(text(&hand.stderr).contains("ratings.drive_altitude_m"), "{}", text(&hand.stderr));
+}
+
 /// A price list with a duplicate, a negative and a non-numeric price is refused with exit 2, naming the file and the
 /// line of the fault (the notes and blank lines count as lines); so is one without the header.
 #[test]
