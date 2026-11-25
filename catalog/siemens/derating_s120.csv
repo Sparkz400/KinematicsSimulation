@@ -1,0 +1,17 @@
+part_number,quantity,altitude_m,ambient_c,pulse_frequency_hz,output_current_factor,basis,source
+,altitude,1000,,,1,rule,
+,altitude,2000,,,0.9,rule,
+,altitude,3000,,,0.8,rule,
+,altitude,4000,,,0.7,rule,
+,ambient,,40,,1,rule,
+,ambient,,45,,0.867,rule,
+,ambient,,50,,0.733,rule,
+,ambient,,55,,0.6,rule,
+,pulse_frequency,,,4000,1,curve,
+,pulse_frequency,,,8000,0.6,curve,
+,pulse_frequency,,,12000,0.4,curve,
+,pulse_frequency,,,16000,0.3,curve,
+6SL3120-1TE32-0AA4,pulse_frequency,,,4000,1,curve,
+6SL3120-1TE32-0AA4,pulse_frequency,,,12000,0.4,curve,
+6SL3120-1TE32-0AA4,pulse_frequency,,,16000,0.3,curve,
+,ambient_limit,,45,16000,,text,cd

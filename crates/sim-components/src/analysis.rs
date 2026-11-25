@@ -1469,7 +1469,7 @@ pub fn any_not_finite<'a>(verdicts: impl IntoIterator<Item = &'a Verdict>) -> bo
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 84] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 87] = [
     // A guide's moment ratings (Mx, My, Mz), which its equivalent load takes where a machine gives the moments.
     "ratings.guide_moment_x_nm",
     "ratings.guide_moment_y_nm",
@@ -1566,6 +1566,10 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 84] = [
     "ratings.max_repeatability_m",
     "ratings.max_positioning_error_rad",
     "ratings.max_repeatability_rad",
+    // The installation conditions of a catalogue drive, which derate its currents (`catalog::drive_derating`).
+    "ratings.drive_ambient_c",
+    "ratings.drive_altitude_m",
+    "ratings.drive_pulse_frequency_hz",
 ];
 
 fn at_most(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -> Verdict {
