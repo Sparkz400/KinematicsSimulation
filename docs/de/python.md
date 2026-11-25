@@ -18,8 +18,8 @@ einen MCP-Server für LLM-Clients ([MCP-Server](../mcp.md), englisch).
 pip install kinematics-sim
 ```
 
-Auf PyPI liegen die Wheels jeder Release für Windows, Linux (x86-64) und macOS (Apple Silicon), bisher die von 1.0.0;
-das Extra `mcp` kommt mit der Release danach. Für den Stand des Repositorys wird das Wheel dort gebaut und installiert:
+Auf PyPI liegen die Wheels jeder Release für Windows, Linux (x86-64) und macOS (Apple Silicon); das Extra `mcp`
+gibt es dort ab 1.1.0. Für den Stand des Repositorys wird das Wheel dort gebaut und installiert:
 
 ```bash
 pip install maturin==1.16.0
