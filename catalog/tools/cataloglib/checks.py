@@ -888,6 +888,44 @@ def siemens_s120_dc_link_trip_is_that_of_active_line_modules(tables):
     return errors
 
 
+def siemens_derating_factors_fall_with_the_condition_and_are_one_when_rated(tables):
+    """Drive derating: every factor within 0..1, the rows of one curve never rising with altitude, ambient temperature or
+    pulse frequency, one at the rated condition (the lowest point of each), and a row of its own only for a Motor Module
+    of motor_modules_s120.csv."""
+    errors = []
+    for name in ("siemens/derating_s210.csv", "siemens/derating_s120.csv"):
+        if name not in tables:
+            continue
+        curves = {}
+        for r in tables[name]:
+            try:
+                if r["quantity"] == "ambient_limit":
+                    continue
+                factor = need(r, "output_current_factor")
+                if not 0 < factor <= 1:
+                    errors.append(f"{name}: factor {factor}")
+                if r["quantity"] == "altitude_ambient":
+                    curves.setdefault((r["part_number"], "altitude", r["ambient_c"]), []).append((need(r, "altitude_m"), factor))
+                    curves.setdefault((r["part_number"], "ambient", r["altitude_m"]), []).append((need(r, "ambient_c"), factor))
+                else:
+                    x = {"altitude": "altitude_m", "ambient": "ambient_c", "pulse_frequency": "pulse_frequency_hz"}[r["quantity"]]
+                    curves.setdefault((r["part_number"], r["quantity"], ""), []).append((need(r, x), factor))
+            except (KeyError, ValueError) as e:
+                errors.append(f"{name}: {e}")
+        for (part, kind, at), points in curves.items():
+            points.sort()
+            # Rated where both other conditions are rated: the ambient curve of a higher altitude starts below 1.
+            if points[0][1] != 1 and not (kind == "ambient" and at and at != min((k[2] for k in curves if k[1] == "ambient"), key=float)):
+                errors.append(f"{name}: {part or 'all'} {kind} {at}: not 1 at its lowest point")
+            if any(b[1] > a[1] for a, b in zip(points, points[1:])):
+                errors.append(f"{name}: {part or 'all'} {kind} {at}: rises")
+    if "siemens/derating_s120.csv" in tables and "siemens/motor_modules_s120.csv" in tables:
+        modules = by_part(tables["siemens/motor_modules_s120.csv"])
+        errors += [f"{r['part_number']}: derating row of no Motor Module" for r in tables["siemens/derating_s120.csv"]
+                   if r["part_number"] and r["part_number"] not in modules]
+    return errors
+
+
 CHECKS = [
     festo_exct_values_agree_with_its_own_geometry,
     siemens_s210_motors_are_plausible_and_their_converters_exist,
@@ -902,6 +940,7 @@ CHECKS = [
     siemens_s120_line_modules_are_plausible,
     siemens_s120_dc_link_trip_is_that_of_active_line_modules,
     siemens_s120_braking_resistors_fit_their_modules,
+    siemens_derating_factors_fall_with_the_condition_and_are_one_when_rated,
     siemens_s120_data_sheets_agree_with_the_catalogue,
     bahr_rows_are_unique_and_the_gantries_are_there,
     bahr_belt_and_pulley_agree,

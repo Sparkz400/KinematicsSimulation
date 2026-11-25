@@ -296,6 +296,51 @@ const JUMP: usize = N_ELASTIC;
 // Rigid state: [x, z, vx, vz, sx, sz], and the deflections of the two brakes.
 const RIGID_BRAKE: usize = 6;
 const N_RIGID: usize = 8;
+/// The most coordinates that carry mass in the elastic model: x, z, the sway q, the lean u and the beam's deflection w.
+const MAX_COORDINATES: usize = 5;
+
+/// A short list on the stack (the elastic model's per-step vectors are at most `MAX_COORDINATES` squared long), which
+/// reads as a slice of what has been pushed.
+#[derive(Clone, Copy)]
+struct Stack<T, const N: usize> {
+    items: [T; N],
+    len: usize,
+}
+
+impl<T: Copy + Default, const N: usize> Stack<T, N> {
+    fn new() -> Self {
+        Self { items: [T::default(); N], len: 0 }
+    }
+
+    /// `len` default entries (zeros for numbers).
+    fn of_len(len: usize) -> Self {
+        Self { items: [T::default(); N], len }
+    }
+
+    fn push(&mut self, item: T) {
+        self.items[self.len] = item;
+        self.len += 1;
+    }
+}
+
+impl<T: std::fmt::Debug, const N: usize> std::fmt::Debug for Stack<T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl<T, const N: usize> std::ops::Deref for Stack<T, N> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.items[..self.len]
+    }
+}
+
+impl<T, const N: usize> std::ops::DerefMut for Stack<T, N> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.items[..self.len]
+    }
+}
 
 /// The eigenpairs of K x = w2 M x for the symmetric n x n matrices `m` (positive definite) and `k`, row by row, lowest
 /// w2 first, each x scaled to x'Mx = 1: the eigenvalues of L^-1 K L^-T (M = L L') by Jacobi rotations, x = L^-T y. Empty
@@ -609,11 +654,19 @@ impl TGantry {
 
     /// The elastic model's coordinates that carry mass, in the order of `elastic_mass`: x (the carriage on the frame), z,
     /// with effects.frame_compliance the frame's sway q, with a flexible Z axis its lean u.
-    fn coordinates(&self) -> Vec<usize> {
-        let mut at = vec![X, Z];
-        at.extend(self.frame.as_ref().map(|_| Q));
-        at.extend(self.flex.as_ref().map(|_| U));
-        at.extend(self.vertical().map(|_| W));
+    fn coordinates(&self) -> Stack<usize, MAX_COORDINATES> {
+        let mut at = Stack::new();
+        at.push(X);
+        at.push(Z);
+        if self.frame.is_some() {
+            at.push(Q);
+        }
+        if self.flex.is_some() {
+            at.push(U);
+        }
+        if self.vertical().is_some() {
+            at.push(W);
+        }
         at
     }
 
@@ -625,11 +678,11 @@ impl TGantry {
     /// comment), the difference of two speeds over ground in which the frame's sway q' cancels, so the idlers ride on x'.
     ///   and the belt's 1/2 xx x'^2 + xz x' z' + cross q' x' + 1/2 sway q'^2   (`belt_mass`, `belt_sway`)
     /// (without the lean mz rides on w). The derivatives, the energy, the modes and the frame's momentum all take this.
-    fn elastic_mass(&self, x: f64, z: f64) -> Vec<f64> {
+    fn elastic_mass(&self, x: f64, z: f64) -> Stack<f64, { MAX_COORDINATES * MAX_COORDINATES }> {
         let at = self.coordinates();
         let n = at.len();
         let index = |coordinate: usize| at.iter().position(|&c| c == coordinate);
-        let mut mass = vec![0.0; n * n];
+        let mut mass = Stack::of_len(n * n);
         // v v' times `weight`, v given by the (coordinate, factor) of its non-zero entries; and a cross term.
         let add = |mass: &mut [f64], v: &[(usize, f64)], weight: f64| {
             for &(i, a) in v {
@@ -642,12 +695,17 @@ impl TGantry {
             mass[i * n + j] += value;
             mass[j * n + i] += value;
         };
-        let mut carriage = vec![(0, 1.0)];
-        carriage.extend(index(Q).map(|q| (q, 1.0)));
+        let mut carriage: Stack<(usize, f64), 3> = Stack::new();
+        carriage.push((0, 1.0));
+        if let Some(q) = index(Q) {
+            carriage.push((q, 1.0));
+        }
         add(&mut mass, &carriage, self.m_x() - self.m_z() + self.chain.mass(x).0);
         // The idlers spin with the belt's speed past the carriage, which the frame's sway does not change: x' alone.
         add(&mut mass, &[(0, 1.0)], self.m_idlers[0]);
-        carriage.extend(index(U).map(|u| (u, 1.0)));
+        if let Some(u) = index(U) {
+            carriage.push((u, 1.0));
+        }
         add(&mut mass, &carriage, self.m_z());
         add(&mut mass, &[(1, 1.0)], self.m_z() + self.m_idlers[1]);
         let (xx, xz) = self.belt_mass(x, z);
@@ -1255,15 +1313,16 @@ impl TGantry {
         } else {
             0.0
         };
-        let mut force = vec![
-            fx + process_x + chain_growth * w * (0.5 * w - vx) + belt_x + beam_x,
+        let mut force: Stack<f64, MAX_COORDINATES> = Stack::new();
+        force.push(fx + process_x + chain_growth * w * (0.5 * w - vx) + belt_x + beam_x);
+        force.push(
             fz_belt - on_z - ffz - 0.5 * s[U] * s[U] * (dk_dz + self.lean_weight_rise_with_z(s[Z])) - idler_z
                 + process_z * (1.0 + d_rise * s[U] * s[U])
                 + process_x * self.tip_slope(s[Z])[0] * s[U]
                 + self.stop_force(1, s[Z], vz)
                 - self.z_weight()
                 + belt_z,
-        ];
+        );
         if let Some(f) = &self.frame {
             force.push(-f.stiffness * s[Q] - f.damping * s[V + Q] + process_x - chain_growth * vx * w);
         }
@@ -1282,14 +1341,18 @@ impl TGantry {
         // An obstacle's push at the tool (`Machine::set_tool_force`): its virtual power per unit of each coordinate's rate,
         // through the tip's place on all of them as `tool_state` has it (lean, sway, rise, the beam's deflection).
         if let Some(push) = sim_core::tool_force_on_rates(self, s, &self.push, V..S) {
-            force.iter_mut().zip(&at).for_each(|(f, c)| *f += push[*c]);
+            force.iter_mut().zip(at.iter()).for_each(|(f, c)| *f += push[*c]);
         }
-        let acc = sim_components::chain::solve(&self.elastic_mass(s[X], s[Z]), &force)
-            .unwrap_or_else(|| vec![f64::NAN; at.len()]);
+        // `chain::solve` without its copies: the same elimination on the stack.
+        let mut mass = self.elastic_mass(s[X], s[Z]);
+        let mut acc = force;
+        if !sim_components::chain::solve_in_place(&mut mass, &mut acc) {
+            acc.iter_mut().for_each(|a| *a = f64::NAN);
+        }
         for c in [Q, U, W] {
             (out[c], out[V + c]) = (0.0, 0.0);
         }
-        for (c, a) in at.into_iter().zip(acc) {
+        for (&c, &a) in at.iter().zip(acc.iter()) {
             (out[c], out[V + c]) = (s[V + c], a);
         }
         let belt_torque =
@@ -1422,7 +1485,9 @@ impl TGantry {
                 .map(|k| 0.5 * self.j_pulley * s[V + A + k].powi(2) + 0.5 * self.j_rotor * s[V + PA + k].powi(2))
                 .sum::<f64>();
         let frame = self.frame.as_ref().map_or(0.0, |f| 0.5 * f.stiffness * s[Q].powi(2));
-        let speeds: Vec<f64> = self.coordinates().iter().map(|&c| s[V + c]).collect();
+        let at = self.coordinates();
+        let mut speeds: Stack<f64, MAX_COORDINATES> = Stack::new();
+        at.iter().for_each(|&c| speeds.push(s[V + c]));
         let mass = self.elastic_mass(s[X], s[Z]);
         let n = speeds.len();
         let kinetic = 0.5 * (0..n * n).map(|rc| speeds[rc / n] * mass[rc] * speeds[rc % n]).sum::<f64>() + turning;

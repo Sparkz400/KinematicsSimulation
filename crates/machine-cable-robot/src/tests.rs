@@ -27,6 +27,18 @@ fn planar_with_rope(rope: f64) -> CableRobot {
 
 const CENTRE: [f64; 2] = [0.0, 0.8];
 
+/// The stack lists the derivative's vectors are made of read, iterate and compare as the `Vec`s they replace did: the
+/// entries in their order, to the bit, and only up to their length.
+#[test]
+fn a_short_list_holds_what_was_collected_in_order() {
+    let values = [0.1, -0.0, f64::MIN_POSITIVE, 3.0e-310, 1.0 / 3.0];
+    let list: Short<f64, 8> = values.iter().copied().collect();
+    assert_eq!(list.len(), values.len());
+    assert!(list.iter().zip(values).all(|(a, b)| a.to_bits() == b.to_bits()));
+    assert_eq!(list.into_iter().map(f64::to_bits).collect::<Vec<_>>(), values.map(f64::to_bits));
+    assert!(Short::<f64, 8>::default().is_empty());
+}
+
 /// Each cable at the centre, by hand: the carriage 1 m across and 0.8 m down (or up) from the pulley's swivel point.
 /// In the pulley's plane, centre M = (0.025, 0), so m = |(0.975, -0.8)| = 1.261200 m, the straight part
 /// l_f = sqrt(m^2 - r^2) = 1.260952 m, theta_B = atan2(-0.8, 0.975) - acos(0.025 / m) = -2.238097 rad, the wrap
@@ -529,7 +541,7 @@ fn the_sagging_cables_pull_is_the_gradient_of_their_energy() {
         let gradient = (8.0 * (at(1.0) - at(-1.0)) - (at(2.0) - at(-2.0))) / 12e-5;
         off = off.max((force[i] + gradient).abs());
     }
-    let t: Vec<f64> = robot.tensions(&spans, &[0.0; 4], &free, &[0.0; 4]).platform;
+    let t = robot.tensions(&spans, &[0.0; 4], &free, &[0.0; 4]).platform;
     let pull = robot.sag_pull(&spans, &free, &t);
     println!("the force off the energy's gradient by {off:e} N; the sag's pull {pull:?} N");
     assert!(pull.iter().any(|f| f.abs() > 5e-6), "{pull:?}");

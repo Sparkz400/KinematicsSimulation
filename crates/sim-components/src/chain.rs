@@ -442,6 +442,12 @@ pub trait Mechanism: Send {
     fn collision_parts(&self) -> &'static [&'static str] {
         &[]
     }
+    /// The ids of the segments `scene` draws, in order from the base to the tool, as the links that the check of the
+    /// machine's own parts looks at (`Machine::self_collision_capsules`): each a capsule of half its width, not an
+    /// obstacle's part. Empty by default: the machine's own parts are then those of `collision_parts`.
+    fn collision_links(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// For effects.base_compliance (`Machine::frame_momentum`): the load's momentum at joints q and speeds qd (passive
     /// ones included), in the frame of the tool pose's x, y, z, each driven joint's rotor adding `rotor_spin` (its
@@ -1978,6 +1984,63 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         let mut scene = Scene::default();
         self.scene(s, &mut scene);
         sim_core::scene::scene_boxes(&scene.parts, self.mechanism.collision_parts())
+    }
+
+    /// The links of the mechanism (`Mechanism::collision_links`) as capsules, for the check of the machine's own parts.
+    fn self_collision_capsules(&self, s: &[f64]) -> Vec<sim_core::Capsule> {
+        let links = self.mechanism.collision_links();
+        let mut capsules = self.collision_capsules(s);
+        if links.is_empty() {
+            return capsules;
+        }
+        let mut scene = Scene::default();
+        self.scene(s, &mut scene);
+        capsules.extend(scene.parts.iter().filter(|part| links.contains(&part.id)).filter_map(
+            |part| match part.shape {
+                sim_core::Shape::Segment { to, width } => {
+                    Some(sim_core::Capsule { from: part.pos, to, radius: width / 2.0 })
+                }
+                _ => None,
+            },
+        ));
+        capsules
+    }
+
+    /// The exact adjacency of the links: link i with link i + 1, across a link of no length (the frames of a spherical
+    /// wrist coincide) to the next one, and with the links of no length at the end of the next one; the tool's boxes
+    /// with the last two links that have a length and those after them (the flange box reaches back over the link
+    /// before the last). The obstacles' capsules come first among the capsules and are not joined to anything here.
+    fn connected_bodies(&self, s: &[f64], boxes: usize, capsules: usize) -> Option<Vec<(usize, usize)>> {
+        if self.mechanism.collision_links().is_empty() {
+            return None;
+        }
+        let all = self.self_collision_capsules(s);
+        if all.len() != capsules {
+            return None;
+        }
+        let own = self.collision_capsules(s).len();
+        let long: Vec<bool> =
+            all.iter().map(|c| (0..3).map(|i| (c.to[i] - c.from[i]).powi(2)).sum::<f64>() > 1e-12).collect();
+        let mut pairs = Vec::new();
+        for i in own..capsules {
+            // Up to and including the next link that has a length, and the links of no length at its end (a point at the
+            // flange sits on the quill, at its length from the arm before).
+            let mut reached = false;
+            for j in i + 1..capsules {
+                if reached && long[j] {
+                    break;
+                }
+                pairs.push((boxes + i, boxes + j));
+                reached |= long[j];
+            }
+        }
+        // The last two links with a length, and what comes after them.
+        let from = (own..capsules).rev().filter(|k| long[*k]).nth(1).unwrap_or(own);
+        for b in 0..boxes {
+            pairs.extend((from..capsules).map(|k| (b, boxes + k)));
+            pairs.extend((0..b).map(|a| (a, b)));
+        }
+        Some(pairs)
     }
 }
 

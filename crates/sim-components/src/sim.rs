@@ -191,6 +191,12 @@ pub struct Sim {
     pub least_clearance: f64,
     /// The first contact with an obstacle since the start.
     pub contact: Option<Contact>,
+    /// The machine's own parts against each other (`collision::PlanCheck::own`): joined as they are at the start pose,
+    /// looked at after the first base step and then every `OWN_PARTS_EVERY_S`, in the simulated state (a load that
+    /// swings, a machine that coasts); its least since the start is the verdict "self-collision".
+    pub own_parts: crate::collision::PlanCheck,
+    /// When the own parts were last looked at (s), `None` before the first look.
+    own_at: Option<f64>,
     /// Whether the drives tripped (effects.drive_monitoring) while a part touched an obstacle, and have not been
     /// enabled since. Which monitor, and the stopping distances, are in `control.fault`.
     pub crashed: bool,
@@ -249,6 +255,10 @@ pub struct Snapshot {
     clearance: f64,
     least_clearance: f64,
     contact: Option<Contact>,
+    #[serde(default)]
+    own: Option<crate::collision::SelfClearance>,
+    #[serde(default)]
+    own_at: Option<f64>,
     crashed: bool,
     contact_force: f64,
     gaps: Vec<f64>,
@@ -379,6 +389,11 @@ pub(crate) fn start_pose(cfg: &Config, machine: &dyn Machine) -> Result<Vec<f64>
     if in_range(machine, &pose) { Ok(pose) } else { Err(ConfigError::Invalid("start.pose".into())) }
 }
 
+/// How often the run looks at the machine's own parts (`Sim::own_parts`), s: a look draws the machine's parts, which on
+/// an arm costs about as much as a step. At 1 m/s the machine moves a millimetre in this time, the planned path's
+/// spacing.
+pub const OWN_PARTS_EVERY_S: f64 = 1e-3;
+
 impl Sim {
     /// The machine at rest at its configured start pose.
     pub fn new(entry: &MachineEntry, cfg: &Config) -> Result<Self, ConfigError> {
@@ -387,9 +402,12 @@ impl Sim {
         let machine = (entry.build)(cfg)?;
         let (dt, substeps) = timing(cfg)?;
         let start = start_pose(cfg, machine.as_ref())?;
+        let min_clearance = cfg.non_negative("profile.min_clearance_m")?;
         let mut state = Vec::new();
         let mut torque = vec![0.0; machine.motors().len()];
         machine.equilibrium(&start, &mut state, &mut torque);
+        let build = || (entry.build)(cfg);
+        let own_parts = crate::collision::PlanCheck::at_start(min_clearance, machine.as_ref(), &state, &start, build)?;
         let control = Controller::new(cfg, machine.as_ref(), &state)?;
         let limit_violations = check_limits(machine.as_ref(), &control.motor_drives(machine.as_ref()));
         let (heated, part_heating) = (heated_parts(cfg, machine.as_ref())?, heats(cfg)?);
@@ -418,11 +436,13 @@ impl Sim {
             losses: Vec::new(),
             obstacles: crate::collision::obstacles(cfg)?,
             crash: cfg.bool("effects.crash")?,
-            min_clearance: cfg.non_negative("profile.min_clearance_m")?,
+            min_clearance,
             path: path_run(cfg)?,
             clearance: f64::INFINITY,
             least_clearance: f64::INFINITY,
             contact: None,
+            own_parts,
+            own_at: None,
             crashed: false,
             contact_force: 0.0,
             gaps: Vec::new(),
@@ -445,8 +465,9 @@ impl Sim {
             // The step counter is the clock; a new base step would make time jump.
             return Err(ConfigError::Invalid("sim.dt_s".into()));
         }
-        // Not used by a running simulation, but a config it would not start with is refused all the same.
-        start_pose(cfg, machine.as_ref())?;
+        // Not used by a running simulation but for the own parts' joints, and a config it would not start with is
+        // refused all the same.
+        let start = start_pose(cfg, machine.as_ref())?;
         // Everything that can refuse the config runs before anything changes: a refused reload leaves the old sim.
         let mut heated = heated_parts(cfg, machine.as_ref())?;
         let part_heating = heats(cfg)?;
@@ -458,8 +479,16 @@ impl Sim {
             cfg.bool("effects.crash")?,
             cfg.non_negative("profile.min_clearance_m")?,
         );
+        // On a machine of their own: this one's state is adopted below, not taken at the start pose.
+        let spare = (entry.build)(cfg)?;
+        let (mut at, mut torque) = (Vec::new(), vec![0.0; spare.motors().len()]);
+        spare.equilibrium(&start, &mut at, &mut torque);
+        let build = || (entry.build)(cfg);
+        let mut own_parts = crate::collision::PlanCheck::at_start(min_clearance, spare.as_ref(), &at, &start, build)?;
         // The last fallible step; it changes the controller only once it has checked all it reads.
         self.control.apply_config(cfg, machine.as_ref())?;
+        own_parts.own = self.own_parts.own.take();
+        self.own_parts = own_parts;
         machine.set_payload_attached(self.payload_attached);
         let motors = machine.motors().len();
         let (mut before, mut after, mut speed) = (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
@@ -508,6 +537,8 @@ impl Sim {
             clearance: self.clearance,
             least_clearance: self.least_clearance,
             contact: self.contact.clone(),
+            own: self.own_parts.own.clone(),
+            own_at: self.own_at,
             crashed: self.crashed,
             contact_force: self.contact_force,
             gaps: self.gaps.clone(),
@@ -541,6 +572,8 @@ impl Sim {
         self.obstacles.clone_from(&s.obstacles);
         (self.clearance, self.least_clearance, self.crashed) = (s.clearance, s.least_clearance, s.crashed);
         self.contact.clone_from(&s.contact);
+        self.own_parts.own.clone_from(&s.own);
+        self.own_at = s.own_at;
         self.gaps.clone_from(&s.gaps);
         (self.contact_force, self.absorbed) = (s.contact_force, s.absorbed);
         // The pushes are those of the next step, which works them out afresh; until then the restored state has none.
@@ -575,27 +608,23 @@ impl Sim {
                 Ok(runs) => runs,
                 Err(e) => return Some(Err(CommandError { key: e.key })),
             };
-        Some(match runs.as_slice() {
-            [one] if one.feed.is_none() => self.plan_path(&one.pieces, run.time_optimal),
-            _ => self.plan_program(&runs, run.time_optimal),
+        Some(match crate::program::as_path(&runs) {
+            Some(pieces) => self.plan_path(pieces, run.time_optimal),
+            None => self.plan_program(&runs, run.time_optimal),
         })
     }
 
     /// The timing for a path from where the machine stands, to run with `Command::Trajectory`.
     /// A time-optimal path that comes nearer to an obstacle than `profile.min_clearance_m`, or touches one, is refused
-    /// (`error-path-collision`); one timed within the axis limits is planned all the same, and `check_plan` tells.
+    /// (`error-path-collision`), and so is one that brings two of the machine's own parts as near
+    /// (`error-path-self-collision`); one timed within the axis limits is planned all the same, and `check_plan` tells.
     pub fn plan_path(
         &self,
         pieces: &[crate::path::Piece],
         time_optimal: bool,
     ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let points = self.control.plan_path(self.machine.as_ref(), pieces, time_optimal)?;
-        if time_optimal
-            && let Some(check) = self.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>())
-            && (check.clearance < self.min_clearance || check.contact.is_some())
-        {
-            return Err(CommandError { key: "error-path-collision" });
-        }
+        self.refuse_near(&points, time_optimal)?;
         Ok(points)
     }
 
@@ -607,24 +636,38 @@ impl Sim {
         time_optimal: bool,
     ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
         let points = self.control.plan_program(self.machine.as_ref(), runs, time_optimal)?;
-        if time_optimal
-            && let Some(check) = self.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>())
-            && (check.clearance < self.min_clearance || check.contact.is_some())
-        {
-            return Err(CommandError { key: "error-path-collision" });
-        }
+        self.refuse_near(&points, time_optimal)?;
         Ok(points)
     }
 
+    /// `plan_path`'s refusal of a time-optimal plan that comes nearer than `profile.min_clearance_m` to an obstacle or
+    /// brings two of the machine's own parts that near, or touches; nothing to look at without obstacles or own parts.
+    fn refuse_near(&self, points: &[(f64, Vec<f64>)], time_optimal: bool) -> Result<(), CommandError> {
+        if !time_optimal || (self.obstacles.is_empty() && !self.own_parts.has_pairs()) {
+            return Ok(());
+        }
+        let Some(check) = self.check_plan(&points.iter().map(|(_, pose)| pose.clone()).collect::<Vec<_>>()) else {
+            return Ok(());
+        };
+        if check.clearance < self.min_clearance || check.contact.is_some() {
+            return Err(CommandError { key: "error-path-collision" });
+        }
+        if check.own_fails(self.min_clearance) {
+            return Err(CommandError { key: "error-path-self-collision" });
+        }
+        Ok(())
+    }
+
     /// The path through `poses` checked against the obstacles before it runs, with the payload as it is now
-    /// (`collision::check_path`). `None` without obstacles.
+    /// (`collision::check_path`), and the machine's own parts against each other (`PlanCheck::own`, joined as at the
+    /// start pose). `None` without obstacles where nothing of the machine's own was checked.
     pub fn check_plan(&self, poses: &[Vec<f64>]) -> Option<crate::collision::PlanCheck> {
-        if self.obstacles.is_empty() {
+        if self.obstacles.is_empty() && !self.own_parts.has_pairs() {
             return None;
         }
-        let mut check = crate::collision::PlanCheck::default();
+        let mut check = self.own_parts.anew();
         crate::collision::check_path(self.machine.as_ref(), &self.obstacles, poses, &mut check);
-        Some(check)
+        (!self.obstacles.is_empty() || check.own.is_some()).then_some(check)
     }
 
     /// How far that planned path is from the pieces as given, at most.
@@ -704,6 +747,9 @@ impl Sim {
         if !self.obstacles.is_empty() {
             self.check_obstacles(approach.unwrap_or(0.0));
         }
+        if self.own_parts.has_pairs() {
+            self.look_at_own_parts();
+        }
         if let Some(contact) = &mut self.contact {
             self.absorbed += taken;
             contact.peak_force = contact.peak_force.max(self.contact_force);
@@ -722,6 +768,18 @@ impl Sim {
             }
         }
         self.step += 1;
+    }
+
+    /// The machine's own parts after a base step (`own_parts`), where `OWN_PARTS_EVERY_S` has passed since the last look
+    /// or there was none. The pose said with a finding is the setpoint's.
+    fn look_at_own_parts(&mut self) {
+        let now = self.time();
+        if self.own_at.is_some_and(|at| now - at < OWN_PARTS_EVERY_S) {
+            return;
+        }
+        let boxes = self.machine.collision_bodies(&self.state);
+        self.own_parts.look_at_own(self.machine.as_ref(), &self.state, &boxes, &self.control.set_pos);
+        self.own_at = Some(now);
     }
 
     /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact, the tool

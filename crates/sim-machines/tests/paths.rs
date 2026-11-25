@@ -87,6 +87,183 @@ fn a_rapid_move_at_v100_runs_at_100_mm_per_second() {
     assert!(peak_path_speed(&plan("vmax")) > 0.3);
 }
 
+/// The XYZ portal planned for a G-code program in mm (`G91` steps from wherever it stands), with the config's `set`
+/// assignments: the plan, and where the portal started.
+fn portal_plan(program: &str, set: &[&str]) -> (Vec<(f64, Vec<f64>)>, Vec<f64>) {
+    let entry = file("xyz-portal.toml");
+    let mut cfg = entry.config();
+    for assignment in set {
+        cfg.set_text(assignment).unwrap();
+    }
+    let sim = Sim::new(entry, &cfg).unwrap();
+    let start = sim.control.planned_pos().to_vec();
+    let runs = program::read("p.nc", program, sim.machine.axes(), &start).unwrap();
+    (sim.plan_program(&runs, false).unwrap(), start)
+}
+
+/// The plan's point nearest `at`: its distance (m) and the path speed there (the faster of the two steps beside it).
+fn pass(points: &[(f64, Vec<f64>)], at: &[f64]) -> (f64, f64) {
+    let dist = |p: &[f64]| p.iter().zip(at).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
+    let i = (0..points.len()).min_by(|&a, &b| dist(&points[a].1).total_cmp(&dist(&points[b].1))).unwrap();
+    let step = |a: usize, b: usize| {
+        points[a].1.iter().zip(&points[b].1).map(|(x, y)| (x - y).powi(2)).sum::<f64>().sqrt()
+            / (points[b].0 - points[a].0)
+    };
+    // (a step of a point to itself is 0 / 0 = NaN, which `max` passes over)
+    let speed = step(i.saturating_sub(1), i).max(step(i, (i + 1).min(points.len() - 1)));
+    (dist(&points[i].1), speed)
+}
+
+/// The farthest any point of the plan is from the lines start-a, a-b (m).
+fn off_lines(points: &[(f64, Vec<f64>)], lines: [&[f64]; 3]) -> f64 {
+    let to_segment = |p: &[f64], a: &[f64], b: &[f64]| {
+        let ab: Vec<f64> = a.iter().zip(b).map(|(x, y)| y - x).collect();
+        let t = (p.iter().zip(a).zip(&ab).map(|((p, a), d)| (p - a) * d).sum::<f64>()
+            / ab.iter().map(|d| d * d).sum::<f64>())
+        .clamp(0.0, 1.0);
+        p.iter().zip(a).zip(&ab).map(|((p, a), d)| (p - a - t * d).powi(2)).sum::<f64>().sqrt()
+    };
+    points
+        .iter()
+        .map(|(_, p)| to_segment(p, lines[0], lines[1]).min(to_segment(p, lines[1], lines[2])))
+        .fold(0.0, f64::max)
+}
+
+/// G61 stops at a corner and G64 P rounds it, whatever the config's `profile.corner_tolerance_m`. From the start s,
+/// `G91 F6000` (0.1 m/s) runs 100 mm in X and then 100 mm in Y: a right angle at c = s + (0.1, 0, 0).
+/// - Config tolerance 2 mm: G64 (the config's) rounds it (the curve's middle is 3 d / 16 = 2 mm off each line, on the
+///   diagonal, sqrt(2) x 2 = 1.41 mm from c: the plan passes more than 1 mm from c), G61 reaches c (within 0.1 um: a
+///   tick may miss the stop by 100 (1 ms)^3 / 6 = 1.7e-8 m) at a speed of about 0 (1.7e-5 m/s in the last step).
+/// - Config tolerance 0, G64 P0.5: the curve's middle is 0.5 mm off each line, 0.5 sqrt(2) = 0.707 mm from c, and no
+///   point is more than 0.5 mm off the two lines; the path passes there at speed.
+#[test]
+fn g61_stops_and_g64_p_rounds_a_corner() {
+    let corner = |start: &[f64]| [start[0] + 0.1, start[1], start[2]];
+    let go = |mode: &str, set: &[&str]| portal_plan(&format!("G91 F6000\n{mode}\nG1 X100\nG1 Y100"), set);
+    let (rounded, s) = go("G64", &["profile.corner_tolerance_m = 0.002"]);
+    let (dist, _) = pass(&rounded, &corner(&s));
+    assert!(dist > 1.0e-3, "G64 at the config's 2 mm passes {dist} m from the corner");
+    let (stopped, s) = go("G61", &["profile.corner_tolerance_m = 0.002"]);
+    let (dist, speed) = pass(&stopped, &corner(&s));
+    assert!(dist < 1e-7 && speed < 1e-3, "G61: {dist} m from the corner at {speed} m/s");
+
+    let (blended, s) = go("G64 P0.5", &[]);
+    let c = corner(&s);
+    let end = [c[0], c[1] + 0.1, c[2]];
+    let off = off_lines(&blended, [&s, &c, &end]);
+    assert!(off <= 0.5e-3 + 1e-9 && off > 0.4e-3, "{off} m off the lines");
+    let (dist, speed) = pass(&blended, &c);
+    assert!((0.69e-3..0.80e-3).contains(&dist) && speed > 0.01, "{dist} m from the corner at {speed} m/s");
+}
+
+/// The mode of the block after a corner governs it. `G64 P0.5` for X100 and Y100, then G61 for X-100 and Y-100 from s:
+/// the corner after X100 (both blocks G64) is rounded, the one after Y100 (the next block is G61) is reached and
+/// stopped at, so is the last. The other way round (G61, X100, then G64 P0.5 for Y100) the corner is stopped at too:
+/// a change of mode ends the run (documented: RS-274 would round it there).
+#[test]
+fn the_mode_of_the_block_after_a_corner_governs_it() {
+    let (points, s) = portal_plan("G91 F6000\nG64 P0.5\nG1 X100\nG1 Y100\nG61\nG1 X-100\nG1 Y-100", &[]);
+    let at = |dx: f64, dy: f64| [s[0] + dx, s[1] + dy, s[2]];
+    let (dist, speed) = pass(&points, &at(0.1, 0.0));
+    assert!(dist > 0.6e-3 && speed > 0.01, "G64 to G64: {dist} m from the corner at {speed} m/s");
+    for (dx, dy) in [(0.1, 0.1), (0.0, 0.1)] {
+        let (dist, speed) = pass(&points, &at(dx, dy));
+        assert!(dist < 1e-7 && speed < 1e-3, "G64 to G61 at ({dx}, {dy}): {dist} m, {speed} m/s");
+    }
+    let (points, s) = portal_plan("G91 F6000\nG61\nG1 X100\nG64 P0.5\nG1 Y100", &[]);
+    let (dist, speed) = pass(&points, &[s[0] + 0.1, s[1], s[2]]);
+    assert!(dist < 1e-7 && speed < 1e-3, "G61 to G64: {dist} m, {speed} m/s");
+}
+
+/// A program of rapids alone is one run at the axes' limits, which plans as a path file does; with a G61 it still stops
+/// at its corner. `G91 G61 G0 X100`, `G0 Y100` with the config's tolerance at 2 mm: the configured path's plan
+/// (`Sim::plan_configured_path`, as `run --path`, the app and the FMU take it) reaches the corner s + (0.1, 0, 0) at
+/// rest, as `g61_stops_and_g64_p_rounds_a_corner` has it for G1; without the G61 it passes 1.41 mm from it. Fails if a
+/// lone feedless run goes to `plan_path`, which takes the config's tolerance.
+#[test]
+fn g61_on_a_program_of_rapids_stops_at_the_corner() {
+    let entry = file("xyz-portal.toml");
+    let mut cfg = entry.config();
+    cfg.set_text("profile.corner_tolerance_m = 0.002").unwrap();
+    let plan = |mode: &str| {
+        let text = format!("G91 {mode}\nG0 X100\nG0 Y100");
+        let sim = Sim::new(entry, &with_path(&cfg, "p.nc", &text, false).unwrap()).unwrap();
+        let s = sim.control.planned_pos().to_vec();
+        (sim.plan_configured_path().unwrap().unwrap(), [s[0] + 0.1, s[1], s[2]])
+    };
+    let (stopped, corner) = plan("G61");
+    let (dist, speed) = pass(&stopped, &corner);
+    assert!(dist < 1e-7 && speed < 1e-3, "G61: {dist} m from the corner at {speed} m/s");
+    let (rounded, corner) = plan("");
+    assert!(pass(&rounded, &corner).0 > 1e-3);
+}
+
+/// G4 P0.5 holds the portal where the move before ended for 0.5 s: 500 profile cycles of 1 ms, the poses equal, and
+/// the plan is 0.5 s longer than the same program with `G4 P0` (which splits the run in the same way, so the two plans
+/// differ in the dwell only). A longer dwell moves no pose.
+#[test]
+fn g4_holds_the_pose_for_its_time() {
+    let program = |p: &str| format!("G91 F6000\nG1 X100\nG4 P{p}\nG1 Y100");
+    let (with, _) = portal_plan(&program("0.5"), &[]);
+    let (without, _) = portal_plan(&program("0"), &[]);
+    let (a, b) = (with[with.len() - 1].0, without[without.len() - 1].0);
+    assert!((a - b - 0.5).abs() < 1e-9, "{a} s against {b} s");
+    assert_eq!(with.len(), without.len() + 500);
+    // The first two equal poses in a row are the end of the move before and the dwell's first: 500 more follow.
+    let i = (0..with.len() - 1).find(|&i| with[i].1 == with[i + 1].1).expect("no pose is held");
+    let j = (i..with.len()).take_while(|&j| with[j].1 == with[i].1).last().unwrap();
+    assert_eq!(j - i, 500);
+    assert!((with[j].0 - with[i].0 - 0.5).abs() < 1e-9, "{} s to {} s", with[i].0, with[j].0);
+}
+
+/// `profile.feed_override` scales the feed of G1 moves, never the machine's limits, and G0 not at all. G91 F3000 G1
+/// X400 (0.4 m at 0.05 m/s): the cruise at 0.05 m/s lasts (0.4 - 0.05 t) / 0.05 = 7.96 s (t = 2 sqrt(0.05 / 100) = 45 ms,
+/// the ramp up and down to a speed at the jerk 100 m/s^3), at override 0.5 and 0.025 m/s (0.4 - 0.025 t) / 0.025 =
+/// 15.97 s: twice as long within 1 %. 1.0 is the plan of the config's own 1.0 (the factor is a multiplication by 1). At
+/// F60000 (1 m/s, above X's 0.8 m/s) override 2.0 asks 2 m/s and the plan stays at the axis limit. A G0 plan is the
+/// same at every override. A RAPID MoveL at v100 (0.1 m/s) runs at 0.05 m/s at 0.5. A value of 0 or below, or above
+/// 2, is refused naming the key.
+#[test]
+fn feed_override_scales_the_feed_within_the_machines_limits() {
+    let cruise = |points: &[(f64, Vec<f64>)], speed: f64| {
+        let steps = points.windows(2).filter(|w| {
+            let d = w[1].1.iter().zip(&w[0].1).map(|(b, a)| (b - a).powi(2)).sum::<f64>().sqrt();
+            (d / (w[1].0 - w[0].0) - speed).abs() < 1e-6
+        });
+        steps.count() as f64 * 1e-3
+    };
+    let straight = "G91 F3000\nG1 X400";
+    let (whole, _) = portal_plan(straight, &[]);
+    let (same, _) = portal_plan(straight, &["profile.feed_override = 1.0"]);
+    assert_eq!(whole, same);
+    let (half, _) = portal_plan(straight, &["profile.feed_override = 0.5"]);
+    let (full, slow) = (cruise(&whole, 0.05), cruise(&half, 0.025));
+    assert!(
+        (full - 7.96).abs() < 0.05 && (slow - 15.97).abs() < 0.05 && (slow / full - 2.0).abs() < 0.02,
+        "{full} {slow}"
+    );
+    let (fast, _) = portal_plan("G91 F60000\nG1 X400", &["profile.feed_override = 2.0"]);
+    let peak = peak_path_speed(&fast);
+    assert!(peak <= 0.8 + 1e-6 && peak > 0.79, "{peak} m/s");
+    let (rapid, _) = portal_plan("G91 G0 X400", &[]);
+    assert_eq!(rapid, portal_plan("G91 G0 X400", &["profile.feed_override = 0.5"]).0);
+    let entry = file("xyz-portal.toml");
+    let mut cfg = entry.config();
+    cfg.set_text("profile.feed_override = 0.5").unwrap();
+    let sim = Sim::new(entry, &cfg).unwrap();
+    let module = "MODULE m\n PROC main()\n  MoveL [[250,200,250],[1,0,0,0],[0,0,0,0],[9E9,9E9,9E9,9E9,9E9,9E9]], v100, \
+                  fine, tool0;\n ENDPROC\nENDMODULE";
+    let runs = program::read("p.mod", module, sim.machine.axes(), sim.control.planned_pos()).unwrap();
+    let peak = peak_path_speed(&sim.plan_program(&runs, false).unwrap());
+    assert!((peak - 0.05).abs() < 1e-9, "{peak} m/s");
+    for bad in ["0.0", "-1.0", "2.5"] {
+        let mut cfg = entry.config();
+        cfg.set_text(&format!("profile.feed_override = {bad}")).unwrap();
+        let error = Sim::new(entry, &cfg).err().unwrap_or_else(|| panic!("{bad} was taken"));
+        assert!(format!("{error:?}").contains("profile.feed_override"), "{bad}: {error:?}");
+    }
+}
+
 /// The time-optimal plan takes each motor's friction at the speed it turns off its torque. The XYZ portal's Z motor held
 /// to 0.2 N m (`drive.mz.peak_torque_nm`) on the path down to (0.1, 0.1, 0.02) and across to (0.3, 0.2, 0.2): its shaft
 /// friction is 0.02 tanh(w / 0.5) + 1e-4 w N m (0.06 N m at 400 rad/s), and the Z guide's 10 N Coulomb and 15 N s/m
@@ -176,4 +353,23 @@ fn lines_on_six_axes_are_planned_time_optimal() {
         let end = plan(&(line(point(0.5)) + &line(point(0.75)))).pop().unwrap().1;
         assert!(end.iter().zip(point(0.75)).all(|(a, b)| (a - b).abs() < 1e-9), "{}: {end:?}", entry.id);
     }
+}
+
+/// A program's reported deviation (`Sim::program_deviations`, what `run --path` and the app say) is planned within the
+/// corner tolerance of each run's G61 or G64 P, as the plan is: `G91 F6000 G64 P0.5`, X100 then Y100, rounds its right
+/// angle 0.5 mm off the two lines (`g61_stops_and_g64_p_rounds_a_corner`), and says so; with G61 the corner is
+/// stopped at and the deviation is nil (below 1 nm).
+#[test]
+fn a_programs_deviation_takes_its_corner_mode() {
+    let entry = file("xyz-portal.toml");
+    let sim = Sim::new(entry, &entry.config()).unwrap();
+    let start = sim.control.planned_pos().to_vec();
+    let deviation = |mode: &str| {
+        let runs =
+            program::read("p.nc", &format!("G91 F6000\n{mode}\nG1 X100\nG1 Y100"), sim.machine.axes(), &start).unwrap();
+        sim.program_deviations(&runs, false).unwrap().into_iter().fold(0.0, f64::max)
+    };
+    let rounded = deviation("G64 P0.5");
+    assert!(rounded > 0.4e-3 && rounded <= 0.5e-3 + 1e-9, "{rounded}");
+    assert!(deviation("G61") < 1e-9);
 }

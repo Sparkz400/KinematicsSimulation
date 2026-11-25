@@ -618,9 +618,9 @@ impl Instance {
             sim_components::program::read_with(&file, &text, sim.machine.axes(), sim.control.planned_pos(), speed)
                 .map_err(|e| ("fmi-error-path", format!("{file}:{}: {}", e.line, self.tr.tr_arg(e.key, &e.detail))))?;
         // A program with feeds is planned run by run; one run at the axes' limits as a path file is.
-        match runs.as_slice() {
-            [run] if run.feed.is_none() => sim.plan_path(&run.pieces, time_optimal),
-            _ => sim.plan_program(&runs, time_optimal),
+        match sim_components::program::as_path(&runs) {
+            Some(pieces) => sim.plan_path(pieces, time_optimal),
+            None => sim.plan_program(&runs, time_optimal),
         }
         .map_err(|e| ("fmi-error-path", self.tr.tr(e.key).to_string()))
     }

@@ -463,6 +463,16 @@ impl Based {
             std::array::from_fn(|k| p[k] + t[k] + turned[k])
         })
     }
+
+    /// The machine's capsules `capsules` as the base's sway moves them (`scene_mover`).
+    fn moved(&self, state: &[f64], mut capsules: Vec<sim_core::Capsule>) -> Vec<sim_core::Capsule> {
+        if let Some(mover) = self.scene_mover(state, 1.0) {
+            for c in &mut capsules {
+                (c.from, c.to) = (mover(c.from), mover(c.to));
+            }
+        }
+        capsules
+    }
 }
 
 impl Machine for Based {
@@ -833,13 +843,13 @@ impl Machine for Based {
         bodies
     }
     fn collision_capsules(&self, state: &[f64]) -> Vec<sim_core::Capsule> {
-        let mut capsules = self.inner.collision_capsules(&state[..self.n()]);
-        if let Some(mover) = self.scene_mover(state, 1.0) {
-            for c in &mut capsules {
-                (c.from, c.to) = (mover(c.from), mover(c.to));
-            }
-        }
-        capsules
+        self.moved(state, self.inner.collision_capsules(&state[..self.n()]))
+    }
+    fn self_collision_capsules(&self, state: &[f64]) -> Vec<sim_core::Capsule> {
+        self.moved(state, self.inner.self_collision_capsules(&state[..self.n()]))
+    }
+    fn connected_bodies(&self, state: &[f64], boxes: usize, capsules: usize) -> Option<Vec<(usize, usize)>> {
+        self.inner.connected_bodies(&state[..self.n()], boxes, capsules)
     }
     fn friction_contacts(&self) -> Vec<FrictionContact> {
         self.inner.friction_contacts()

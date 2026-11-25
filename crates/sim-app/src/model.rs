@@ -630,7 +630,7 @@ const SENSITIVITY_KEYS: [&str; 6] = [
 ];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 53] = [
+const CHECKS: [&str; 54] = [
     "motor-peak",
     "motor-thermal",
     "stepper-synchronism",
@@ -678,6 +678,7 @@ const CHECKS: [&str; 53] = [
     "cam-acceleration",
     "cam-jerk",
     "collision",
+    "self-collision",
     "thermal-warm-start",
     "thermal-cycle-repeat",
     "pick-tracking",
@@ -2204,14 +2205,14 @@ impl Model {
                                 speed,
                             )
                             .map_err(|e| ("ui-file-line", format!("{}:{}: {}", inputs.path_file, e.line, e.detail)))?;
-                            match runs.as_slice() {
-                                [run] if run.feed.is_none() => (
-                                    sim.plan_path(&run.pieces, inputs.time_optimal).map_err(command)?,
-                                    vec![sim.path_deviation(&run.pieces, inputs.time_optimal).map_err(command)?],
+                            match sim_components::program::as_path(&runs) {
+                                Some(pieces) => (
+                                    sim.plan_path(pieces, inputs.time_optimal).map_err(command)?,
+                                    vec![sim.path_deviation(pieces, inputs.time_optimal).map_err(command)?],
                                 ),
                                 // A program: the deviation of each run from its pieces, each from where the one
                                 // before ends.
-                                _ => (
+                                None => (
                                     sim.plan_program(&runs, inputs.time_optimal).map_err(command)?,
                                     sim.program_deviations(&runs, inputs.time_optimal).map_err(command)?,
                                 ),

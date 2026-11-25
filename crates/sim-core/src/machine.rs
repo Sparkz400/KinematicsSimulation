@@ -542,6 +542,21 @@ pub trait Machine: Send {
     fn collision_capsules(&self, _state: &[f64]) -> Vec<crate::Capsule> {
         Vec::new()
     }
+    /// The capsules the planning check of the machine's own parts looks at (`collision::check_path`): by default those
+    /// of `collision_capsules`. A machine whose links are not checked against obstacles can add them here.
+    fn self_collision_capsules(&self, state: &[f64]) -> Vec<crate::Capsule> {
+        self.collision_capsules(state)
+    }
+    /// Which of the machine's own parts belong together and so are not checked against each other, at `state`, with
+    /// `boxes` boxes (`collision_bodies`) and `capsules` capsules (`self_collision_capsules`): pairs of indices into
+    /// the boxes followed by the capsules. `None`, the default, takes the rule that parts which touch, overlap or lie
+    /// closer than `profile.min_clearance_m` to each other at the first pose checked are joined (a carriage on its
+    /// rail, a link at its joint) and every other pair is checked; that cannot see a collision of parts already in
+    /// contact at that pose. A machine that knows its parts' adjacency tells it exactly. The step of the simulation is
+    /// not touched: parts do not push each other there.
+    fn connected_bodies(&self, _state: &[f64], _boxes: usize, _capsules: usize) -> Option<Vec<(usize, usize)>> {
+        None
+    }
 
     /// The friction contacts for the friction view. Empty where the machine tells none.
     fn friction_contacts(&self) -> Vec<FrictionContact> {

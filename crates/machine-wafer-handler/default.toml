@@ -510,6 +510,9 @@ path_tolerance_m = 0.0
 # For `sim-cli optimise`: the cycle's own 10 mm lift.
 min_clearance_m = 0.01
 corner_tolerance_m = 0.0
+# The factor on the programmed feed F of a program's G1, G2, G3 and robot moves (--path): 0.5 runs them at half the feed.
+# Above 0 and at most 2 (this simulator's limit); a planning value, not a run-time one. G0 rapids and the axis limits stay.
+feed_override = 1.0
 cycle_timing = "axis_limits"
 deceleration_ratio = 1.0
 shape = "s-curve"
