@@ -11,8 +11,10 @@ fn the_same_text_gives_the_same_entry_a_changed_one_a_new_one_and_a_refused_one_
     let start = sim_netlist::kept_entries();
 
     let first = load_text(&text, "cache").unwrap();
-    let again = load_text(&text, "cache").unwrap();
-    assert!(std::ptr::eq(first, again), "the same text is the same entry");
+    // As a sweep or an FMU made in a loop loads it: 200 times, still the one entry.
+    for _ in 0..200 {
+        assert!(std::ptr::eq(first, load_text(&text, "cache").unwrap()), "the same text is the same entry");
+    }
     // Loaded from several threads at once, still one entry.
     let from_threads: Vec<usize> = std::thread::scope(|s| {
         let loads: Vec<_> =

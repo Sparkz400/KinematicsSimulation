@@ -512,7 +512,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
             ]
             .concat());
             // Unstable gains on purpose: the rows say FAIL and the exit code is 1.
-            assert_judged(&out);
+            assert_eq!(out.status.code(), Some(1), "{}: {}", entry.id, text(&out.stderr));
             let unstable = text(&out.stdout);
             assert!(unstable.lines().count() > 1, "{}: {unstable}", entry.id);
             unstable
