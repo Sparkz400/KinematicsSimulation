@@ -345,14 +345,20 @@ struct LegPart {
     on_platform: bool,
 }
 
-/// A leg part's motion at a pose and twist: A (its velocity per twist, as columns), its acceleration `a0` at zero twist
-/// acceleration, the leg direction's rate per twist `au` (columns) and its second derivative `u2` at zero twist
-/// acceleration.
+/// What a leg's parts share at a pose and twist, whatever their place on the leg: the platform joint's unit velocities
+/// per twist component (columns) and its acceleration `d2` at zero twist acceleration, the leg direction's rate per
+/// twist `au` (columns) and its second derivative `u2` at zero twist acceleration.
+struct LegMotion {
+    unit: [V3; 6],
+    d2: V3,
+    au: [V3; 6],
+    u2: V3,
+}
+
+/// A leg part's motion: A (its velocity per twist, as columns) and its acceleration `a0` at zero twist acceleration.
 struct PartMotion {
     a: [V3; 6],
     a0: V3,
-    au: [V3; 6],
-    u2: V3,
 }
 
 #[derive(Clone)]
@@ -562,8 +568,9 @@ impl Hexapod {
         std::array::from_fn(|i| std::array::from_fn(|j| self.inertia[i][j] + extra[i][j]))
     }
 
-    /// Leg i's part `part` at a pose with the platform's twist `xi`: see the module's derivation.
-    fn part_motion(&self, i: usize, legs: &Legs, xi: &[f64; 6], part: &LegPart) -> PartMotion {
+    /// Leg i's motion at a pose with the platform's twist `xi`, which its parts (`part_motion`) share: see the module's
+    /// derivation.
+    fn leg_motion(i: usize, legs: &Legs, xi: &[f64; 6]) -> LegMotion {
         let (u, l, b) = (legs.u[i], legs.length[i], legs.b[i]);
         let (v, w) = ([xi[0], xi[1], xi[2]], [xi[3], xi[4], xi[5]]);
         let (d1, d2) = (add(v, cross(w, b)), cross(w, cross(w, b)));
@@ -572,25 +579,28 @@ impl Hexapod {
         let rate2 = dot(up, d1) + dot(u, d2);
         let u2: V3 = std::array::from_fn(|k| (d2[k] - 2.0 * up[k] * rate - u[k] * rate2) / l);
         // The twist's unit columns: the platform joint's velocity per v_k (e_k) and per w_k (e_k x b).
-        let unit = |k: usize| -> V3 {
+        let unit: [V3; 6] = std::array::from_fn(|k| {
             let e: V3 = std::array::from_fn(|r| if r == k % 3 { 1.0 } else { 0.0 });
             if k < 3 { e } else { cross(e, b) }
-        };
+        });
         let au: [V3; 6] = std::array::from_fn(|k| {
-            let d = unit(k);
+            let d = unit[k];
             let along = dot(u, d);
             std::array::from_fn(|r| (d[r] - u[r] * along) / l)
         });
+        LegMotion { unit, d2, au, u2 }
+    }
+
+    /// A leg's part `part` in its leg's motion.
+    fn part_motion(leg: &LegMotion, part: &LegPart) -> PartMotion {
         let c = part.centre;
         if part.on_platform {
             PartMotion {
-                a: std::array::from_fn(|k| sub(unit(k), au[k].map(|x| x * c))),
-                a0: sub(d2, u2.map(|x| x * c)),
-                au,
-                u2,
+                a: std::array::from_fn(|k| sub(leg.unit[k], leg.au[k].map(|x| x * c))),
+                a0: sub(leg.d2, leg.u2.map(|x| x * c)),
             }
         } else {
-            PartMotion { a: au.map(|col| col.map(|x| x * c)), a0: u2.map(|x| x * c), au, u2 }
+            PartMotion { a: leg.au.map(|col| col.map(|x| x * c)), a0: leg.u2.map(|x| x * c) }
         }
     }
 
@@ -599,13 +609,19 @@ impl Hexapod {
     fn parts_terms(&self, legs: &Legs, xi: &[f64; 6]) -> ([[f64; 6]; 6], [f64; 6]) {
         let (mut m, mut held) = ([[0.0; 6]; 6], [0.0; 6]);
         for i in 0..6 {
+            let leg = Self::leg_motion(i, legs, xi);
             for part in self.parts.iter().filter(|p| p.mass > 0.0 || p.inertia > 0.0) {
-                let pm = self.part_motion(i, legs, xi, part);
+                let pm = Self::part_motion(&leg, part);
                 let accel = [pm.a0[0], pm.a0[1], pm.a0[2] + self.g];
                 for r in 0..6 {
-                    held[r] += part.mass * dot(pm.a[r], accel) + part.inertia * dot(pm.au[r], pm.u2);
-                    for c in 0..6 {
-                        m[r][c] += part.mass * dot(pm.a[r], pm.a[c]) + part.inertia * dot(pm.au[r], pm.au[c]);
+                    held[r] += part.mass * dot(pm.a[r], accel) + part.inertia * dot(leg.au[r], leg.u2);
+                    // M is symmetric to the bit (a dot product commutes), so the lower triangle takes the upper's value.
+                    for c in r..6 {
+                        let value = part.mass * dot(pm.a[r], pm.a[c]) + part.inertia * dot(leg.au[r], leg.au[c]);
+                        m[r][c] += value;
+                        if c != r {
+                            m[c][r] += value;
+                        }
                     }
                 }
             }
@@ -715,8 +731,9 @@ impl Mechanism for Hexapod {
         (0..3).for_each(|k| f.angular[k] += turning[k]);
         let p = [tool[0], tool[1], tool[2]];
         for i in 0..6 {
+            let leg = Self::leg_motion(i, &legs, &xi);
             for part in self.parts.iter().filter(|p| p.mass > 0.0 || p.inertia > 0.0) {
-                let pm = self.part_motion(i, &legs, &xi, part);
+                let pm = Self::part_motion(&leg, part);
                 let speed: V3 = std::array::from_fn(|k| (0..6).map(|c| pm.a[c][k] * xi[c]).sum());
                 let at = self.part_position(i, &legs, p, part);
                 sim_components::base::add_point(&mut f, part.mass, at, speed);
@@ -726,7 +743,7 @@ impl Mechanism for Hexapod {
                     (0..3).for_each(|k| f.first_moment[k] -= part.mass * self.geo.base[i][k]);
                 }
                 // The part's turn about its own centre across the leg: u x u'.
-                let rate: V3 = std::array::from_fn(|k| (0..6).map(|c| pm.au[c][k] * xi[c]).sum());
+                let rate: V3 = std::array::from_fn(|k| (0..6).map(|c| leg.au[c][k] * xi[c]).sum());
                 let spin = cross(legs.u[i], rate);
                 (0..3).for_each(|k| f.angular[k] += part.inertia * spin[k]);
             }
