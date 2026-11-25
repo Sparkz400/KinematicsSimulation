@@ -5,7 +5,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # "labeled": the label full-tests on a pull request starts its full run (below).
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: "0 1 * * 0"
   workflow_dispatch:
@@ -18,11 +20,13 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # A pull request runs the fast tests (profile ci: the default filter of .config/nextest.toml leaves out the tests that
-  # take over 20 s each); a push to main, the weekly run and a run by hand run every test (profile ci-full).
-  TEST_PROFILE: ${{ github.event_name != 'pull_request' && 'ci-full' || 'ci' }}
+  # take over 20 s each); a push to main, the weekly run, a run by hand and a pull request labelled full-tests run every
+  # test (profile ci-full). The branch protection of main requires the full run's partitions 3 to 6, which only a
+  # labelled pull request has: a slow test cannot turn main red unseen (it did twice in November 2026).
+  TEST_PROFILE: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-tests')) && 'ci-full' || 'ci' }}
   # The jobs "test" split the tests into this many partitions per platform; keep it equal to the length of their
   # matrix's list "partition".
-  PARTITIONS: ${{ github.event_name != 'pull_request' && 6 || 2 }}
+  PARTITIONS: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-tests')) && 6 || 2 }}
 
 # The jobs that need the test binaries wait for "build" and run even when it failed for the other platform
 # (`!cancelled()`); where their own platform's archive is missing, they fail at its download. No job skips the steps
@@ -121,7 +125,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        partition: ${{ fromJSON(github.event_name != 'pull_request' && '[1, 2, 3, 4, 5, 6]' || '[1, 2]') }}
+        partition: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-tests')) && '[1, 2, 3, 4, 5, 6]' || '[1, 2]') }}
     name: test (${{ matrix.os }}, ${{ matrix.partition }})
     runs-on: ${{ matrix.os }}
     # A push's partitions took up to 75 minutes on 16 November 2026 (Windows, 2 and 4), and the tests that took over

@@ -943,7 +943,11 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
     cfg.set_text("effects.thermal_warm_start = false").unwrap();
     let bounded = bounds(&cfg).unwrap();
     let (worst, runs) = verdict_worst(entry, &cfg, &bounded).unwrap();
-    assert_eq!(text(&run.stderr).trim(), format!("Cycles simulated in the search for the worst corners: {runs}"));
+    // The first line; a note on the self-collision check may follow (`verdicts_say_where_the_machines_own_parts_...`).
+    assert_eq!(
+        text(&run.stderr).lines().next(),
+        Some(format!("Cycles simulated in the search for the worst corners: {runs}").as_str())
+    );
     let mut lines = out.lines();
     assert_eq!(lines.next().unwrap(), "check,motor,worst,limit,worst_case,at_high_bound,at_low_bound");
     let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();

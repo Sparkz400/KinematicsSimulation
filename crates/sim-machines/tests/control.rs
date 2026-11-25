@@ -694,6 +694,10 @@ fn every_effect_switch_changes_the_traces() {
             "effects.part_heating" | "effects.thermal_feedback" => cold,
             // The links' bending on a machine without links (the joint kit's slides and table).
             "effects.link_bending" | "effects.link_bending_reaction" => base.get("link_bending").is_err(),
+            // The joint kit's common switches on a machine without a parallelogram rod (`arm::bar_springs`).
+            "effects.bar_elasticity" | "effects.bar_rocking" => {
+                base.f64s("arm.bars_axial_stiffness_n_m").map_or(true, |k| k.iter().all(|k| *k == 0.0))
+            }
             // The braking resistor's temperature where there is no DC link and so no resistor.
             "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
             // A machine that cannot tell the momentum of what moves on its base cannot stand on a compliant one

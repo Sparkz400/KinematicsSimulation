@@ -46,7 +46,9 @@ release built incrementally: after a change only what changed is compiled again.
 
 Its default profile runs the fast tests: it leaves out every test that takes over 20 s, written into its filter by
 `tools/slow_tests.py` from the timings of a full run. A pull request runs those. A push to main runs all of them (the
-profile `full` locally, `ci-full` in CI). The long sweeps run weekly and by hand (Actions, CI, "Run workflow"), not on
+profile `full` locally, `ci-full` in CI), and so does a pull request with the label `full-tests` (some two hours).
+Main's branch protection requires the full run's partitions, so label a pull request `full-tests` once it is ready to
+merge: a slow test it breaks shows before the merge, not after. The long sweeps run weekly and by hand (Actions, CI, "Run workflow"), not on
 a push, as they take hours: the velocity loops' margins across the bounds (`across_the_bounds::*` in the control tests
 of sim-machines) and the EXCT-30's search for the worst corner of its bounds, which no profile runs by itself. The
 filter names each slow test exactly, so a new or renamed test (or a check split into one test per machine,

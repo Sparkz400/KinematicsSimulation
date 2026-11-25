@@ -1072,6 +1072,9 @@ fn every_tool_tab_starts_its_computation() {
         ("ui-analysis-run-sensitivity", Analysis::Sensitivity),
         ("ui-analysis-run-optimise", Analysis::Optimise),
     ] {
+        // The job just started replaced its button with a wider progress bar and Cancel, which moves the buttons after it
+        // (a wrapped row): laid out again before the next is looked for, or the click lands where it was.
+        d.frames(2);
         let label = d.tr(key);
         let tools = d.regions()[TOOLS];
         let button = d.find_where(key, |w| w.role == Role::Button && w.label == label && tools.contains_rect(w.rect));
