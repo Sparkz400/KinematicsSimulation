@@ -148,14 +148,14 @@ fn check_table(name: &str, text: &str, compiled: &str) -> Result<(), ConfigError
         return Ok(());
     }
     let fail = |what: String| ConfigError::Part("error-catalog-read", format!("{name}: {what}"));
-    let mut lines = text.lines().enumerate().filter(|(_, l)| !l.starts_with('#'));
+    // As `rows` reads them: notes and blank lines passed over.
+    let mut lines = text.lines().enumerate().filter(|(_, l)| !l.starts_with('#') && !l.trim().is_empty());
     let header: Vec<&str> = lines.next().map_or(Vec::new(), |(_, l)| l.split(',').collect());
     let wanted = compiled.lines().find(|l| !l.starts_with('#')).unwrap_or("");
     if let Some(missing) = wanted.split(',').find(|c| !header.contains(c)) {
         return Err(fail(format!("missing column \"{missing}\"")));
     }
-    // A blank line (an editor's at the end) is a row that matches no part: the readers pass over it, so it is no error.
-    match lines.find(|(_, l)| !l.trim().is_empty() && l.split(',').count() != header.len()) {
+    match lines.find(|(_, l)| l.split(',').count() != header.len()) {
         Some((i, l)) => {
             Err(fail(format!("line {}: {} fields, the header has {}", i + 1, l.split(',').count(), header.len())))
         }
@@ -261,7 +261,8 @@ fn rows(text: &'static str) -> Vec<Row> {
     let table = match parsed.iter().find(|(k, _)| *k == key) {
         Some(&(_, table)) => table,
         None => {
-            let mut lines = text.lines().filter(|l| !l.starts_with('#'));
+            // A blank line (an editor's at the end) is no row: one would lack every column but the first.
+            let mut lines = text.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty());
             let header: Vec<&str> = lines.next().unwrap_or("").split(',').collect();
             let table: &'static [_] =
                 Vec::leak(lines.map(|line| header.iter().copied().zip(line.split(',')).collect()).collect());

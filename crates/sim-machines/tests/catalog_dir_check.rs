@@ -50,7 +50,32 @@ fn a_table_with_a_missing_column_or_a_short_row_is_refused_and_an_unchanged_copy
     let text = message(&dir);
     assert!(text.contains("siemens/motors_s210.csv") && text.contains(&format!("line {}", row + 1)), "{text}");
 
-    // (c) Unchanged: accepted.
+    // (c) Unchanged but for a blank line at the end of every table, as an editor leaves it: accepted, and a motor search
+    // (whose readers panicked on the blank line's row of one empty field) runs through the catalogue.
     std::fs::write(&motors, &original).unwrap();
+    fn blank_lines(dir: &Path) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                blank_lines(&path);
+            } else if path.extension().is_some_and(|e| e == "csv") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                std::fs::write(
+                    &path,
+                    format!(
+                        "{text}
+
+"
+                    ),
+                )
+                .unwrap();
+            }
+        }
+    }
+    blank_lines(&dir);
     use_directory(&dir).unwrap();
+    let entry = &machine_single_axis::ENTRY;
+    let found =
+        sim_components::catalog::search_motors(entry, &entry.config(), "400v", &|a| a.starts_with("1FK2104"), None);
+    assert!(!found.is_empty());
 }
